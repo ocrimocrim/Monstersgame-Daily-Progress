@@ -1,0 +1,77 @@
+{
+  "date": "2025-09-29T22:24:10.189619+00:00",
+  "players": {
+    "[DDoV] Therapist": {
+      "name": "[DDoV] Therapist",
+      "level": 120,
+      "wins": 5380,
+      "losses": 1527,
+      "anc": 110,
+      "gold": 148043
+    },
+    "[DDoV] Samurai Warrior": {
+      "name": "[DDoV] Samurai Warrior",
+      "level": 146,
+      "wins": 30400,
+      "losses": 2808,
+      "anc": 80,
+      "gold": 1589912
+    },
+    "[DDoV] Slevin": {
+      "name": "[DDoV] Slevin",
+      "level": 149,
+      "wins": 39338,
+      "losses": 5422,
+      "anc": 72,
+      "gold": 1399007
+    },
+    "[DDoV] rL.pa1n": {
+      "name": "[DDoV] rL.pa1n",
+      "level": 143,
+      "wins": 19312,
+      "losses": 2543,
+      "anc": 103,
+      "gold": 451176
+    },
+    "[DDoV] Mephisto": {
+      "name": "[DDoV] Mephisto",
+      "level": 122,
+      "wins": 8137,
+      "losses": 1632,
+      "anc": 70,
+      "gold": 427867
+    },
+    "Desert Storm": {
+      "name": "Desert Storm",
+      "level": 139,
+      "wins": 11462,
+      "losses": 2632,
+      "anc": 77,
+      "gold": 423412
+    },
+    "[DDoV] Dioseph": {
+      "name": "[DDoV] Dioseph",
+      "level": 119,
+      "wins": 6256,
+      "losses": 2254,
+      "anc": 69,
+      "gold": 278974
+    },
+    "[DDoV] Breakout": {
+      "name": "[DDoV] Breakout",
+      "level": 98,
+      "wins": 13861,
+      "losses": 858,
+      "anc": 67,
+      "gold": 259740
+    },
+    "[DDoV] Bundy": {
+      "name": "[DDoV] Bundy",
+      "level": 123,
+      "wins": 2839,
+      "losses": 2128,
+      "anc": 106,
+      "gold": 147166
+    }
+  }
+}
