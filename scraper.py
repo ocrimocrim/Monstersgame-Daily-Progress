@@ -3,27 +3,34 @@ from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
+# Basis
 BASE_URL = "https://int3.monstersgame.moonid.net"
 HIGHSCORE_URL = BASE_URL + "/index.php?ac=highscore&sac=spieler&highrasse=0&count=0&filter=gold_won&direction="
 STATE_PATH = "data/state.json"
 PLAYERS_FILE = "players.txt"
 
-LOGIN_URL = BASE_URL + "/index.php"
+# moonID Login
+MOONID_BASE = "https://moonid.net"
+# Die Connect-ID ist pro Spielserver unterschiedlich. 240 passt zu deinem Beispiel.
+MOONID_CONNECT_ID = os.environ.get("MG_CONNECT_ID", "240")
+MOONID_LOGIN_URL = f"{MOONID_BASE}/account/login/?next=/api/account/connect/{MOONID_CONNECT_ID}/"
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
 MG_USERNAME = os.environ.get("MG_USERNAME", "")
 MG_PASSWORD = os.environ.get("MG_PASSWORD", "")
+# Optionaler direkter Session-Cookie, falls nötig. Name ist typischerweise PHPSESSID auf der Spiel-Domain.
+MG_COOKIE = os.environ.get("MG_COOKIE", "")
 
 SESSION_HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Referer": BASE_URL + "/",
+    "Referer": MOONID_BASE + "/",
     "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
 }
 
 MOTIVATION = [
     "Wolves assemble. Heute gab es Beute.",
-    "Rudel aufwachen. Frisches Blut für die Hall of Fame.",
-    "Volle Monde. Starke Beutezüge heute.",
+    "Rudel aufwachen. Frische Trophäen liegen auf dem Tisch.",
+    "Voller Mond, volle Taschen.",
     "Rudelbericht. Das Protokoll für heute steht.",
     "Wolves, hört zu. Hier kommt die Beute."
 ]
@@ -63,30 +70,23 @@ def clean_int(text):
     t = re.sub(r"[^\d]", "", text)
     return int(t) if t else 0
 
-def login(session: requests.Session):
-    r = session.get(BASE_URL + "/index.php", headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
+def login_via_moonid(session: requests.Session):
+    # Login-Seite holen, CSRF einsammeln
+    r = session.get(MOONID_LOGIN_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r.raise_for_status()
-
     soup = BeautifulSoup(r.text, "lxml")
+
     form = None
+    # bevorzugt das Formular mit action /account/login/
     for f in soup.select("form"):
-        if f.select_one("input[type=password]"):
+        action = (f.get("action") or "").lower()
+        if "/account/login/" in action or f.select_one("input[type=password]"):
             form = f
             break
     if form is None:
-        cand = soup.select_one("a[href*='login'], a[href*='signin']")
-        if cand and cand.get("href"):
-            r = session.get(requests.compat.urljoin(BASE_URL, cand["href"]), headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "lxml")
-            for f in soup.select("form"):
-                if f.select_one("input[type=password]"):
-                    form = f
-                    break
-    if form is None:
         raise RuntimeError("Kein Loginformular gefunden")
 
-    action = form.get("action") or "/index.php"
+    action = form.get("action") or "/account/login/"
     login_url = requests.compat.urljoin(r.url, action)
 
     payload = {}
@@ -96,29 +96,34 @@ def login(session: requests.Session):
             continue
         typ = (inp.get("type") or "").lower()
         val = inp.get("value") or ""
+        # CSRF und next übernehmen
         if typ in ("hidden", "submit"):
             payload[name] = val
 
-    user_input = form.select_one("input[name*=user], input[name*=login], input[type=text]")
-    pass_input = form.select_one("input[type=password]")
+    # Feldnamen aus dem HTML: username, password
+    user_input = form.select_one("input[name='username']") or form.select_one("input[name*=user]")
+    pass_input = form.select_one("input[name='password']") or form.select_one("input[type=password]")
     if not user_input or not pass_input:
         raise RuntimeError("Benutzer oder Passwortfeld nicht erkannt")
 
     payload[user_input.get("name")] = MG_USERNAME
     payload[pass_input.get("name")] = MG_PASSWORD
 
+    # Absenden und Weiterleitungen bis zum Gameserver folgen
     r2 = session.post(login_url, data=payload, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r2.raise_for_status()
 
-    html = r2.text
+    # Nach dem Login leitet moonID auf /api/account/connect/<id>/ und dann auf die Spiel-Domain
+    # Wir prüfen mit einem Abruf der Highscore-Seite, ob Cookies gesetzt wurden
+    r3 = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30, allow_redirects=True)
+    r3.raise_for_status()
+    html = r3.text
+    # heuristische Prüfung auf eingeloggt
     if "Logout" not in html and "logout" not in html:
-        r3 = session.get(HIGHSCORE_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-        r3.raise_for_status()
-        if "Logout" not in r3.text and "logout" not in r3.text:
-            raise RuntimeError("Login fehlgeschlagen. Formular erkannt aber Session nicht authentifiziert")
+        raise RuntimeError("Login okay, aber Session auf Spielserver nicht aktiv. Prüfe MG_CONNECT_ID oder Credentials.")
 
 def fetch_highscore(session: requests.Session):
-    r = session.get(HIGHSCORE_URL, headers=SESSION_HEADERS, timeout=30)
+    r = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30)
     r.raise_for_status()
     return r.text
 
@@ -135,16 +140,16 @@ def parse_table(html):
             headers = [td.get_text(strip=True) for td in first.select("td")] if first else []
         mapping = {}
         for idx, h in enumerate(headers):
-            t = h.lower()
+            t = h.strip().lower()
             if "name" in t:
                 mapping["name"] = idx
             elif "lvl" in t:
                 mapping["level"] = idx
             elif "loot" in t:
                 mapping["loot"] = idx
-            elif re.fullmatch(r"w\b.*", t) or t == "w":
+            elif t == "w" or t.startswith("w "):
                 mapping["wins"] = idx
-            elif re.fullmatch(r"l\b.*", t) or t == "l":
+            elif t == "l" or t.startswith("l "):
                 mapping["losses"] = idx
             elif "anc" in t:
                 mapping["anc"] = idx
@@ -242,7 +247,13 @@ def main():
 
     with requests.Session() as s:
         s.headers.update(SESSION_HEADERS)
-        login(s)
+
+        if MG_COOKIE:
+            # Optionaler direkter Cookie auf der Spiel-Domain
+            s.cookies.set("PHPSESSID", MG_COOKIE, domain="int3.monstersgame.moonid.net")
+        else:
+            login_via_moonid(s)
+
         html = fetch_highscore(s)
         rows = parse_table(html)
         today_players = pick_players(rows, watchlist)
