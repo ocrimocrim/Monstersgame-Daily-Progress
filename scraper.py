@@ -1,404 +1,181 @@
-import os, json, random, re, sys, pathlib
-from datetime import datetime, timezone
+import os
+import re
+import unicodedata
+import sys
+from typing import List, Dict
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
 
-# Basis
-BASE_URL = "https://int3.monstersgame.moonid.net"
-HIGHSCORE_URL = BASE_URL + "/index.php?ac=highscore&sac=spieler&highrasse=0&count=0&filter=gold_won&direction="
-STATE_PATH = "data/state.json"
-DEBUG_HTML = "data/last_highscore.html"
-PLAYERS_FILE = "players.txt"
-
-# moonID
-MOONID_BASE = "https://moonid.net"
-MG_CONNECT_ID = os.getenv("MG_CONNECT_ID") or "240"
-MOONID_LOGIN_URL  = f"{MOONID_BASE}/account/login/?next=/api/account/connect/{MG_CONNECT_ID}/"
-MOONID_CONNECT_URL = f"{MOONID_BASE}/api/account/connect/{MG_CONNECT_ID}/"
-
-# Secrets
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
-MG_USERNAME = os.environ.get("MG_USERNAME", "")
-MG_PASSWORD = os.environ.get("MG_PASSWORD", "")
-MG_COOKIE = os.environ.get("MG_COOKIE", "")  # optional
-
-SESSION_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Referer": MOONID_BASE + "/",
-    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-}
-
-MOTIVATION = [
-    "Wolves assemble. Heute gab es Beute.",
-    "Rudel aufwachen. Frische Trophäen liegen auf dem Tisch.",
-    "Voller Mond, volle Taschen.",
-    "Rudelbericht. Das Protokoll für heute steht.",
-    "Wolves, hört zu. Hier kommt die Beute."
-]
-
-# ---------- Utils ----------
-
-ZWS = "\u200b\u200c\u200d\u2060"
-
-def norm_name(s: str) -> str:
-    if s is None:
-        return ""
-    t = str(s)
-    t = t.replace("\xa0", " ")
-    for ch in ZWS:
-        t = t.replace(ch, "")
-    # runde und eckige Klammern vereinheitlichen
-    t = t.replace("（", "(").replace("）", ")").replace("［", "[").replace("］", "]")
-    # mehrere Spaces zusammenziehen
-    t = re.sub(r"\s+", " ", t).strip()
-    return t.lower()
-
-def strip_clantag(s: str) -> str:
-    # führendes [CLAN] plus folgendes Leerzeichen entfernen
-    return re.sub(r"^\[[^\]]+\]\s*", "", s).strip()
-
-def read_players():
-    default_players = [
-        "[DDoV] Slevin",
-        "[DDoV] Samurai Warrior",
-        "[DDoV] rL.pa1n",
-        "Desert Storm",
-        "[DDoV] Bundy",
-        "[DDoV] Mephisto",
-        "[DDoV] Therapist",
-        "[DDoV] Dioseph",
-        "[DDoV] Breakout",
-    ]
-    if os.path.exists(PLAYERS_FILE):
-        with open(PLAYERS_FILE, "r", encoding="utf-8") as f:
-            raw = [line.strip() for line in f if line.strip()]
-    else:
-        raw = default_players
-    # zwei Varianten speichern
-    wl_norm = [norm_name(x) for x in raw]
-    wl_core = [strip_clantag(norm_name(x)) for x in raw]
-    return raw, wl_norm, wl_core
-
-def load_state():
-    if os.path.exists(STATE_PATH):
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"date": None, "players": {}}
-
-def save_state(state):
-    pathlib.Path("data").mkdir(parents=True, exist_ok=True)
-    with open(STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-
-def clean_int(text):
-    if text is None:
-        return 0
-    t = re.sub(r"[^\d]", "", str(text))
-    return int(t) if t else 0
-
-# ---------- Login ----------
-
-def login_via_moonid(session: requests.Session):
-    r = session.get(MOONID_LOGIN_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-    r.raise_for_status()
-    soup = BeautifulSoup(r.text, "lxml")
-
-    form = None
-    for f in soup.select("form"):
-        if f.select_one("input[name='username']") and f.select_one("input[name='password']"):
-            form = f
-            break
-    if form is None:
-        raise RuntimeError("Kein Loginformular gefunden")
-
-    action = form.get("action") or "/account/login/"
-    login_url = requests.compat.urljoin(r.url, action)
-
-    payload = {}
-    for inp in form.select("input"):
-        name = inp.get("name")
-        if not name:
-            continue
-        typ = (inp.get("type") or "").lower()
-        val = inp.get("value") or ""
-        if typ in ("hidden", "submit"):
-            payload[name] = val
-
-    payload["username"] = MG_USERNAME
-    payload["password"] = MG_PASSWORD
-
-    r2 = session.post(login_url, data=payload, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-    r2.raise_for_status()
-
-    r3 = session.get(MOONID_CONNECT_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-    r3.raise_for_status()
-
-    r4 = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30, allow_redirects=True)
-    r4.raise_for_status()
-    if "Logout" not in r4.text and "logout" not in r4.text:
-        raise RuntimeError("Login okay, aber Session auf Spielserver nicht aktiv. Prüfe MG_CONNECT_ID oder nutze MG_COOKIE.")
-
-# ---------- Fetch ----------
-
-def fetch_highscore(session: requests.Session):
-    r = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30)
-    r.raise_for_status()
-    return r.text
-
-# ---------- Parser 1: HTML-Table ----------
-
-def parse_table_bs(html):
-    soup = BeautifulSoup(html, "lxml")
-    candidate_tables = soup.select("table")
-    if not candidate_tables:
-        return []
-
-    def header_map(table):
-        headers = [th.get_text(strip=True) for th in table.select("tr th")]
-        if not headers:
-            first = table.select_one("tr")
-            headers = [td.get_text(strip=True) for td in first.select("td")] if first else []
-        mapping = {}
-        for idx, h in enumerate(headers):
-            t = h.strip().lower()
-            if "name" in t:
-                mapping["name"] = idx
-            elif "lvl" in t:
-                mapping["level"] = idx
-            elif "loot" in t:
-                mapping["loot"] = idx
-            elif t == "w" or t.startswith("w "):
-                mapping["wins"] = idx
-            elif t == "l" or t.startswith("l "):
-                mapping["losses"] = idx
-            elif "anc" in t:
-                mapping["anc"] = idx
-            elif "gold" in t:
-                mapping["gold"] = idx
-        return mapping
-
-    chosen, cols = None, None
-    for tb in candidate_tables:
-        m = header_map(tb)
-        if {"name","level","loot","wins","losses","anc","gold"} <= set(m.keys()):
-            chosen, cols = tb, m
-            break
-    if chosen is None:
-        return []
-
-    data = []
-    for tr in chosen.select("tr"):
-        tds = tr.select("td")
-        if not tds or len(tds) < max(cols.values()) + 1:
-            continue
-        def get(col):
-            return tds[cols[col]].get_text(strip=True) if col in cols else ""
-        row = {
-            "name": norm_name(get("name")),
-            "level": clean_int(get("level")),
-            "loot": clean_int(get("loot")),
-            "wins": clean_int(get("wins")),
-            "losses": clean_int(get("losses")),
-            "anc": clean_int(get("anc")),
-            "gold": clean_int(get("gold")),
-        }
-        if row["name"]:
-            data.append(row)
-    return data
-
-# ---------- Parser 2: pandas.read_html ----------
-
-def parse_table_pandas(html):
-    try:
-        tables = pd.read_html(html, flavor="lxml")
-    except ValueError:
-        return []
-    for df in tables:
-        cols = [str(c).strip().lower() for c in df.columns]
-        has_name = any("name" in c for c in cols)
-        has_gold = any("gold" in c for c in cols)
-        if not (has_name and has_gold):
-            continue
-        def col_idx(keys):
-            for i, c in enumerate(cols):
-                if any(k in c for k in keys):
-                    return i
-            return None
-        idx = {
-            "name": col_idx(["name"]),
-            "level": col_idx(["lvl", "level"]),
-            "loot": col_idx(["loot"]),
-            "wins": col_idx([" w", "wins", "w " , "w"]),
-            "losses": col_idx([" l", "loss", "losses", "l " , "l"]),
-            "anc": col_idx(["anc"]),
-            "gold": col_idx(["gold"]),
-        }
-        req = all(idx[k] is not None for k in ["name","level","loot","wins","losses","anc","gold"])
-        if not req:
-            continue
-        data = []
-        for _, row in df.iterrows():
-            nm = norm_name(row.iloc[idx["name"]])
-            if not nm or nm == "name":
-                continue
-            data.append({
-                "name": nm,
-                "level": clean_int(row.iloc[idx["level"]]),
-                "loot": clean_int(row.iloc[idx["loot"]]),
-                "wins": clean_int(row.iloc[idx["wins"]]),
-                "losses": clean_int(row.iloc[idx["losses"]]),
-                "anc": clean_int(row.iloc[idx["anc"]]),
-                "gold": clean_int(row.iloc[idx["gold"]]),
-            })
-        if data:
-            return data
-    return []
-
-# ---------- Parser 3: Regex über reinen Text ----------
-
-ROW_RX = re.compile(
-    r"""
-    ^\s*(\d+)\.\s+                              # Rang
-    (Vampire|Werewolf)\s+                       # Rasse
-    (.+?)\s+                                    # Name
-    (\d+)\s+                                    # Level
-    ([\d\.,]+)\s+                               # Loot
-    ([\d\.,]+)\s+                               # Bites
-    ([\d\.,]+)\s+                               # W
-    ([\d\.,]+)\s+                               # L
-    ([\d\.,]+)\s+                               # Anc
-    ([\d\.,]+)\s+Gold                           # Gold
-    """,
-    re.VERBOSE | re.MULTILINE
+# -------------------------
+# Konfiguration (per ENV)
+# -------------------------
+# Pflicht: URL der Highscore-Seite (dein Beispiel von int3)
+HIGHSCORE_URL = os.getenv(
+    "MG_HIGHSCORE_URL",
+    "https://int3.monstersgame.moonid.net/index.php?ac=highscore&vid=0",
 )
 
-def parse_table_text(html):
-    soup = BeautifulSoup(html, "lxml")
-    text = soup.get_text("\n", strip=True)
+# Optional: Watchlist als Komma-getrennte Liste, z.B. "[RSK] Royo, The puzzle, ((( -l-_MERCENARIOSKY_-l- )))"
+WATCHLIST_RAW = os.getenv("MG_WATCHLIST", "")
+
+# Optional: Cookies, falls Login nötig ist (in DevTools gesehen)
+COOKIE_SESSIONID = os.getenv("MG_SESSIONID", "").strip()
+COOKIE_CSRFTOKEN = os.getenv("MG_CSRFTOKEN", "").strip()
+
+# Optional: Discord Webhook (wenn gesetzt, wird dorthin gepostet)
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+
+
+# -------------------------
+# Hilfsfunktionen
+# -------------------------
+def norm_name(s: str) -> str:
+    """Unicode normalisieren, Mehrfach-Leerzeichen einklappen, trimmen, Kleinschreibung."""
+    s = unicodedata.normalize("NFKC", s)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip().lower()
+
+
+def to_int(num: str) -> int:
+    """Zahlen mit Tausendertrennzeichen in int wandeln."""
+    if not num:
+        return 0
+    num = num.replace(".", "").replace(",", "").strip()
+    return int(num) if re.fullmatch(r"\d+", num) else 0
+
+
+def fetch_html(url: str) -> str:
+    """HTML holen, mit optionalen Cookies."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MG-Scraper/1.0)",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    cookies = {}
+    if COOKIE_SESSIONID:
+        cookies["sessionid"] = COOKIE_SESSIONID
+    if COOKIE_CSRFTOKEN:
+        cookies["csrftoken"] = COOKIE_CSRFTOKEN
+
+    resp = requests.get(url, headers=headers, cookies=cookies, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
+
+def parse_highscore_table(html: str) -> List[Dict]:
+    """Spielerzeilen aus dem HTML extrahieren (genau wie in deinem Dump)."""
+    soup = BeautifulSoup(html, "html.parser")
     rows = []
-    for m in ROW_RX.finditer(text):
-        nm = norm_name(m.group(3))
-        rows.append({
-            "name": nm,
-            "level": clean_int(m.group(4)),
-            "loot": clean_int(m.group(5)),
-            "wins": clean_int(m.group(7)),
-            "losses": clean_int(m.group(8)),
-            "anc": clean_int(m.group(9)),
-            "gold": clean_int(m.group(10)),
-        })
+
+    for tr in soup.find_all("tr"):
+        a = tr.find("a", href=re.compile(r"showuser"))
+        if not a:
+            continue  # keine Spielerzeile
+
+        tds = tr.find_all("td", class_="tdn_highscore")
+        if len(tds) < 10:
+            # Manche Tabellenzeilen (Überschriften etc.) haben weniger Spalten
+            continue
+
+        # Spalten laut deinem HTML:
+        # 0 rank, 1 race (img alt), 2 name (a), 3 lvl, 4 loot, 5 bites, 6 W, 7 L, 8 Anc. +, 9 Gold + (Text vor <img>)
+        rank_txt = tds[0].get_text(strip=True).rstrip(".")
+        race_img = tds[1].find("img")
+        race = race_img.get("alt").strip() if race_img and race_img.has_attr("alt") else ""
+        name_raw = a.get_text()
+        lvl = tds[3].get_text(strip=True)
+        loot = tds[4].get_text(strip=True)
+        bites = tds[5].get_text(strip=True)
+        wins = tds[6].get_text(strip=True)
+        losses = tds[7].get_text(strip=True)
+        anc = tds[8].get_text(strip=True)
+
+        # In der Gold-Spalte hängt ein Münz-Icon -> nur Zahl vor dem Bild nehmen
+        gold_text = tds[9].get_text(" ", strip=True)
+        gold_text = gold_text.split()[0] if gold_text else "0"
+
+        row = {
+            "rank": to_int(rank_txt),
+            "race": race,
+            "name": unicodedata.normalize("NFKC", name_raw).strip(),
+            "level": to_int(lvl),
+            "loot": to_int(loot),
+            "bites": to_int(bites),
+            "wins": to_int(wins),
+            "losses": to_int(losses),
+            "anc_plus": to_int(anc),
+            "gold_plus": to_int(gold_text),
+        }
+        rows.append(row)
+
     return rows
 
-# ---------- Orchestrierung ----------
 
-def parse_table(html):
-    rows = parse_table_bs(html)
-    if rows:
-        return rows
-    rows = parse_table_pandas(html)
-    if rows:
-        return rows
-    return parse_table_text(html)
-
-def pick_players(rows, wl_norm, wl_core):
-    wl_set = set(wl_norm)
-    wl_core_set = set(wl_core)
-    hits = {}
-    for r in rows:
-        nm = norm_name(r["name"])
-        nm_core = strip_clantag(nm)
-        if nm in wl_set or nm_core in wl_core_set:
-            hits[nm] = r
+def find_watchlist_hits(rows: List[Dict], watchlist: List[str]) -> List[Dict]:
+    wl = {norm_name(n) for n in watchlist if n.strip()}
+    if not wl:
+        return []
+    hits = [r for r in rows if norm_name(r["name"]) in wl]
     return hits
 
-def build_message(today, prev_players, today_players):
-    report, ranked = [], []
-    for name_norm, now in today_players.items():
-        prev = prev_players.get(name_norm, {})
-        d_gold   = now["gold"]   - prev.get("gold", 0)
-        d_wins   = now["wins"]   - prev.get("wins", 0)
-        d_losses = now["losses"] - prev.get("losses", 0)
-        d_anc    = now["anc"]    - prev.get("anc", 0)
-        d_lvl    = now["level"]  - prev.get("level", 0)
 
-        display = now["name"] if now.get("name") else name_norm
-        line = f"{display} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
-        extras = []
-        if d_lvl > 0:
-            extras.append(f"Level up +{d_lvl}")
-        if d_anc > 0:
-            extras.append(f"Ancestor fights +{d_anc}")
-        if extras:
-            line += " " + " ".join(extras)
-        report.append((display, d_gold, line))
-        ranked.append((display, d_gold))
+def fmt_gold(n: int) -> str:
+    return f"{n:,}".replace(",", ".")
 
-    intro = random.choice(MOTIVATION)
-    date_str = today.strftime("%Y-%m-%d")
-    lines = [f"{intro}", f"Datum {date_str}"]
 
-    if ranked:
-        top_name, top_gold = max(ranked, key=lambda x: x[1])
-        lines.append(f"Champion des Tages ist {top_name} mit {top_gold} Gold.")
-    else:
-        lines.append("Keine Treffer in der Watchlist. Prüfe Spielernamen oder Parser.")
+def build_message(hits: List[Dict]) -> str:
+    if not hits:
+        return (
+            "Wolves, hört zu. Hier kommt die Beute.\n"
+            f"Datum {os.getenv('MG_DATE_OVERRIDE', '') or __import__('datetime').date.today()}\n"
+            "Keine Treffer in der Watchlist. Prüfe Spielernamen oder Parser."
+        )
 
-    for _, _, line in sorted(report, key=lambda x: x[0].lower()):
-        lines.append(line)
+    lines = [
+        "Rudel aufwachen. Frische Trophäen liegen auf dem Tisch.",
+        f"Datum {os.getenv('MG_DATE_OVERRIDE', '') or __import__('datetime').date.today()}",
+        "",
+    ]
+    for r in sorted(hits, key=lambda x: x["rank"] or 10**9):
+        lines.append(
+            f"#{r['rank']:>2} {r['race']:<8} {r['name']} | Lvl {r['level']} | "
+            f"Loot {fmt_gold(r['loot'])} | Bites {fmt_gold(r['bites'])} | "
+            f"W {fmt_gold(r['wins'])} / L {fmt_gold(r['losses'])} | "
+            f"Anc+ {fmt_gold(r['anc_plus'])} | Gold+ {fmt_gold(r['gold_plus'])}"
+        )
     return "\n".join(lines)
 
-def send_discord(msg):
-    if not DISCORD_WEBHOOK:
-        print("Kein DISCORD_WEBHOOK gesetzt. Nachricht wird nur ausgegeben.")
-        print(msg)
+
+def post_to_discord(message: str) -> None:
+    if not DISCORD_WEBHOOK_URL:
         return
-    r = requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=30)
-    r.raise_for_status()
+    try:
+        resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=30)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Warn] Discord-Post fehlgeschlagen: {e}", file=sys.stderr)
+
 
 def main():
-    if not MG_USERNAME or not MG_PASSWORD:
-        raise RuntimeError("MG_USERNAME und MG_PASSWORD fehlen")
+    try:
+        html = fetch_html(HIGHSCORE_URL)
+    except Exception as e:
+        print(f"[Fehler] Konnte Highscore nicht laden: {e}")
+        sys.exit(1)
 
-    raw_watch, wl_norm, wl_core = read_players()
+    rows = parse_highscore_table(html)
 
-    with requests.Session() as s:
-        s.headers.update(SESSION_HEADERS)
-        if MG_COOKIE:
-            s.cookies.set("PHPSESSID", MG_COOKIE, domain="int3.monstersgame.moonid.net")
-        else:
-            login_via_moonid(s)
-        html = fetch_highscore(s)
+    # Watchlist aufbauen
+    watchlist = [w.strip() for w in WATCHLIST_RAW.split(",")] if WATCHLIST_RAW else []
 
-    rows = parse_table(html)
+    hits = find_watchlist_hits(rows, watchlist)
 
-    # Debug sichern
-    pathlib.Path("data").mkdir(parents=True, exist_ok=True)
-    with open(DEBUG_HTML, "w", encoding="utf-8") as f:
-        f.write(html[:600000])
+    # NIE max() auf leeren Listen -> vorher prüfen
+    msg = build_message(hits)
 
-    # kurze Logliste der ersten Namen
-    first_names = [r["name"] for r in rows[:8]]
-    print("Gefundene Zeilen", len(rows))
-    print("Beispielnamen", first_names)
+    # Ausgabe + optional Discord
+    print(msg)
+    post_to_discord(msg)
 
-    today_players = pick_players(rows, wl_norm, wl_core)
-
-    state = load_state()
-    prev_players = state.get("players", {})
-    today = datetime.now(timezone.utc)
-
-    msg = build_message(today, prev_players, today_players)
-    send_discord(msg)
-
-    # State mit normalisierten Namen speichern
-    new_state = {"date": today.isoformat(), "players": {norm_name(v["name"]): v for v in today_players.values()}}
-    save_state(new_state)
-    print("Protokoll gesendet und State gespeichert.")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"Fehler {e}")
-        sys.exit(1)
+    main()
