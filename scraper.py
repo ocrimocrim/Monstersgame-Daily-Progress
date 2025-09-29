@@ -1,208 +1,197 @@
-import os
-import re
-import sys
-from typing import List, Tuple, Dict
-
+import os, sys, re, html
+from urllib.parse import urlparse, urljoin
 import requests
 from bs4 import BeautifulSoup
 
-# -------------------- ENV --------------------
-HIGHSCORE_URL = os.getenv("MG_HIGHSCORE_URL", "").strip()
-SESSIONID     = os.getenv("MG_SESSIONID", "").strip()
-CSRF_TOKEN    = os.getenv("MG_CSRFTOKEN", "").strip()      # optional
-CONNECT_ID    = os.getenv("MG_CONNECT_ID", "").strip()     # optional
-USERNAME      = os.getenv("MG_USERNAME", "").strip()       # optional Fallback
-PASSWORD      = os.getenv("MG_PASSWORD", "").strip()       # optional Fallback
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+# ==== Konfiguration aus Secrets/ENV ====
+HIGHSCORE_URL   = os.getenv("MG_HIGHSCORE_URL", "").strip()
+WATCHLIST       = [x.strip() for x in os.getenv("MG_WATCHLIST","").split(",") if x.strip()]
+USERNAME        = os.getenv("MG_USERNAME", "").strip()
+PASSWORD        = os.getenv("MG_PASSWORD", "").strip()
 
-WATCHLIST_FILE = "players.txt"
+SESSIONID       = os.getenv("MG_SESSIONID", "").strip()      # Cookie für moonid.net (SSO)
+PHPSESSID       = os.getenv("MG_PHPSESSID", "").strip()      # (optional) Cookie auf intX.monstersgame.moonid.net
+CSRFTOKEN       = os.getenv("MG_CSRFTOKEN", "").strip()      # (optional) Cookie auf moonid.net
+CONNECT_ID      = os.getenv("MG_CONNECT_ID", "").strip()     # (optional) verstecktes Feld, falls gebraucht
+DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+DEBUG           = os.getenv("MG_DEBUG", "0").strip() == "1"
 
-# -------------------- Utils --------------------
-def norm_name(s: str) -> str:
-    s = (s or "").strip().lower()
-    s = re.sub(r"\s+", " ", s)
-    s = s.strip("[](){}.,;:!?'\"")
-    return s
+if not HIGHSCORE_URL:
+    print("Fehler: MG_HIGHSCORE_URL ist nicht gesetzt.", file=sys.stderr)
+    sys.exit(1)
 
-def load_watchlist(path: str) -> List[str]:
-    if not os.path.isfile(path):
-        return []
-    with open(path, "r", encoding="utf-8") as f:
-        return [ln.strip() for ln in f if ln.strip()]
+# ==== Helpers ====
+def dbg(msg):
+    if DEBUG:
+        print(f"[DEBUG] {msg}")
 
-def send_discord(text: str):
-    if not DISCORD_WEBHOOK_URL:
-        return
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": text}, timeout=20)
-    except Exception:
-        pass
+def host_of(url: str) -> str:
+    return urlparse(url).netloc
 
-# -------------------- Session/Cookies --------------------
-def prepare_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    })
-    if SESSIONID:
-        # auf beide Domains setzen – einige Seiten prüfen streng
-        s.cookies.set("sessionid", SESSIONID, domain=".moonid.net", path="/")
-        s.cookies.set("sessionid", SESSIONID, domain="int3.monstersgame.moonid.net", path="/")
-    if CSRF_TOKEN:
-        s.cookies.set("csrftoken", CSRF_TOKEN, domain=".moonid.net", path="/")
-        s.cookies.set("csrftoken", CSRF_TOKEN, domain="int3.monstersgame.moonid.net", path="/")
-    return s
+def scheme_of(url: str) -> str:
+    return urlparse(url).scheme
 
-def fetch(url: str, s: requests.Session) -> str:
-    r = s.get(url, timeout=40, allow_redirects=True)
-    r.raise_for_status()
-    return r.text
+def moonid_root(url: str) -> str:
+    # egal von welcher Instanz -> SSO ist auf moonid.net
+    return f"{scheme_of(url)}://moonid.net"
 
-# -------------------- Parser --------------------
-def largest_table(soup: BeautifulSoup):
+def biggest_table_html(html_text: str) -> str|None:
+    soup = BeautifulSoup(html_text, "html.parser")
     tables = soup.find_all("table")
     if not tables:
         return None
-    return max(tables, key=lambda t: len(t.find_all("tr")))
+    tables.sort(key=lambda t: len(t.find_all("tr")), reverse=True)
+    return str(tables[0])
 
-def parse_highscore_names(html: str) -> List[str]:
-    soup = BeautifulSoup(html, "html.parser")
-    table = largest_table(soup)
-    if not table:
-        return []
-    names = []
-    for tr in table.find_all("tr"):
-        a = tr.find("a", href=lambda h: h and "showuser" in h)
-        if a:
-            txt = a.get_text(strip=True)
-            if txt:
-                names.append(txt)
-    # uniq
-    seen = set(); out=[]
-    for n in names:
-        if n not in seen:
-            seen.add(n); out.append(n)
-    return out
+def contains_highscore_markers(html_text: str) -> bool:
+    # Erkennungsmerkmal: viele showuser-Links oder typische Highscore-Spalten
+    if "index.php?ac=showuser" in html_text:
+        return True
+    soup = BeautifulSoup(html_text, "html.parser")
+    heads = [th.get_text(strip=True).lower() for th in soup.find_all("th")]
+    wanted = {"lvl", "loot", "bites", "w", "l", "gold", "name:"}
+    return any(any(w in h for w in wanted) for h in heads)
 
-def match_watchlist(found: List[str], watch: List[str]) -> Tuple[List[str], List[str]]:
-    found_norm = {norm_name(n): n for n in found}
-    hits, misses = [], []
-    for w in watch:
-        wn = norm_name(w)
-        if wn in found_norm:
-            hits.append(found_norm[wn])
-        else:
-            misses.append(w)
-    return hits, misses
-
-# -------------------- Login Fallback --------------------
-def form_to_dict(form) -> Dict[str,str]:
-    data = {}
-    for inp in form.find_all(["input","select","textarea"]):
-        name = inp.get("name")
-        if not name: 
-            continue
-        val = inp.get("value", "")
-        data[name] = val
-    return data
-
-def try_password_login(s: requests.Session) -> bool:
-    if not (HIGHSCORE_URL and USERNAME and PASSWORD):
-        return False
-    base = HIGHSCORE_URL.split("/index.php")[0]
-    login_url = base + "/index.php?ac=login"
+def post_discord(msg: str):
+    if not DISCORD_WEBHOOK:
+        return
     try:
-        # 1) Login-Seite holen (Cookies, versteckte Felder)
-        resp = s.get(login_url, timeout=40, allow_redirects=True)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        form = soup.find("form")
-        data = form_to_dict(form) if form else {}
-
-        # 2) Feldnamen tolerant setzen
-        # mögliche Schlüsselnamen für Benutzer/Passwort
-        user_keys = ["username", "login", "user", "nick", "mail", "email"]
-        pass_keys = ["password", "pass", "pw"]
-
-        def put_key(keys, value):
-            for k in keys:
-                if k in data: 
-                    data[k] = value; return
-            # wenn keins existiert, nimm das erste
-            data[keys[0]] = value
-
-        put_key(user_keys, USERNAME)
-        put_key(pass_keys, PASSWORD)
-
-        # optionale Tokens hinzufügen
-        if CONNECT_ID and "connect_id" not in data:
-            data["connect_id"] = CONNECT_ID
-        if CSRF_TOKEN:
-            # gängige Namen
-            for k in ("csrftoken", "csrf_token", "csrfmiddlewaretoken"):
-                if k not in data:
-                    data[k] = CSRF_TOKEN
-
-        # manche Formulare benötigen expliziten Submit-Name
-        if "login" not in data:
-            data["login"] = "Login"
-
-        headers = {"Referer": login_url}
-        s.post(login_url, data=data, headers=headers, timeout=40, allow_redirects=True)
-
-        # 3) Testabruf
-        test_html = s.get(HIGHSCORE_URL, timeout=40, allow_redirects=True).text
-        # wenn wir Tabelle parsen können, gilt Login als erfolgreich
-        return len(parse_highscore_names(test_html)) > 0
-    except Exception:
-        return False
-
-# -------------------- Main --------------------
-def main():
-    if not HIGHSCORE_URL:
-        print("Fehler: MG_HIGHSCORE_URL ist nicht gesetzt.")
-        sys.exit(1)
-
-    s = prepare_session()
-
-    # Versuch 1: einfach laden & parsen
-    try:
-        html = fetch(HIGHSCORE_URL, s)
+        requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=15)
     except Exception as e:
-        print(f"Netzwerkfehler: {e}")
-        sys.exit(1)
+        dbg(f"Discord-Post fehlgeschlagen: {e}")
 
-    names = parse_highscore_names(html)
+# ==== Session vorbereiten ====
+s = requests.Session()
+s.headers.update({
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "de,en;q=0.8",
+    "Connection": "keep-alive",
+})
 
-    # Falls leer: Login-Fallback
-    if not names and (USERNAME and PASSWORD):
-        if try_password_login(s):
-            html = fetch(HIGHSCORE_URL, s)
-            names = parse_highscore_names(html)
-        else:
-            # Kein harter Abbruch mehr – wir melden sauber
-            print("Login fehlgeschlagen. Cookie + Credentials halfen nicht.")
-            return
+HS_HOST = host_of(HIGHSCORE_URL)
+SSO_HOST = "moonid.net"
+SCHEME = scheme_of(HIGHSCORE_URL)
 
-    if not names:
-        print("Konnte keine Rangliste parsen (keine Tabelle/Links gefunden).")
-        return
+# Cookies setzen (wenn vorhanden)
+if SESSIONID:
+    # moonid.net (SSO)
+    for dom in [SSO_HOST, f".{SSO_HOST}"]:
+        s.cookies.set("sessionid", SESSIONID, domain=dom, path="/")
+    dbg("Cookie gesetzt: sessionid @ moonid.net")
 
-    watch = load_watchlist(WATCHLIST_FILE)
-    if not watch:
-        print("Hinweis: players.txt leer oder fehlt. Gefundene Namen (Top-Auszug):")
-        print(", ".join(names[:20]))
-        return
+if CSRFTOKEN:
+    for dom in [SSO_HOST, f".{SSO_HOST}"]:
+        s.cookies.set("csrftoken", CSRFTOKEN, domain=dom, path="/")
+    dbg("Cookie gesetzt: csrftoken @ moonid.net")
 
-    hits, misses = match_watchlist(names, watch)
-    msg_lines = []
-    if hits:
-        msg_lines.append("🎯 Gefunden: " + ", ".join(hits))
-    if misses:
-        msg_lines.append("❌ Nicht gefunden: " + ", ".join(misses))
-    out = "\n".join(msg_lines) if msg_lines else "Keine Watchlist-Treffer."
-    print(out)
-    send_discord(out)
+if PHPSESSID:
+    # direkt für die Spielinstanz
+    for dom in [HS_HOST, f".{HS_HOST}"]:
+        s.cookies.set("PHPSESSID", PHPSESSID, domain=dom, path="/")
+    dbg(f"Cookie gesetzt: PHPSESSID @ {HS_HOST}")
 
-if __name__ == "__main__":
-    main()
+def fetch(url, allow_redirects=True):
+    r = s.get(url, timeout=30, allow_redirects=allow_redirects)
+    dbg(f"GET {url} -> {r.status_code} {('REDIR->'+r.headers.get('Location','')) if r.is_redirect else ''}")
+    return r
+
+def try_highscore():
+    r = fetch(HIGHSCORE_URL)
+    text = r.text or ""
+    if contains_highscore_markers(text):
+        tbl = biggest_table_html(text) or ""
+        if tbl:
+            print(tbl)
+            return True
+    return False
+
+def attempt_login():
+    # 1) Login-Seite SSO auf moonid.net
+    login_base = moonid_root(HIGHSCORE_URL)
+    login_url_candidates = [
+        f"{login_base}/login",
+        f"{login_base}/de/login",
+        f"{login_base}/en/login",
+        f"{login_base}/account/login",
+    ]
+    # Seite aufrufen um Tokens/Form-Felder zu bekommen
+    last_get = None
+    for url in login_url_candidates:
+        try:
+            last_get = fetch(url)
+            if last_get.status_code in (200, 302):
+                break
+        except Exception:
+            continue
+    if not last_get or last_get.status_code >= 400:
+        dbg("Login-Seite nicht erreichbar.")
+        return False
+
+    soup = BeautifulSoup(last_get.text, "html.parser")
+    form = soup.find("form")
+    if not form:
+        dbg("Kein <form> auf Login-Seite gefunden – SSO kann anderes Layout haben.")
+        form_action = last_get.url
+    else:
+        form_action = form.get("action") or last_get.url
+        form_action = urljoin(last_get.url, form_action)
+
+    # Feldnamen raten + versteckte Felder übernehmen
+    data = {}
+    for inp in soup.find_all("input"):
+        name = inp.get("name")
+        if not name:
+            continue
+        data[name] = inp.get("value", "")
+
+    # mögliche Benutzernamen-/Passwort-Feldnamen abdecken
+    for k in ["username", "login", "user", "email", "email_or_username"]:
+        if k in data or form:
+            data[k] = USERNAME
+            break
+    else:
+        data["username"] = USERNAME
+
+    for k in ["password", "pass", "pw"]:
+        if k in data or form:
+            data[k] = PASSWORD
+            break
+    else:
+        data["password"] = PASSWORD
+
+    if CSRFTOKEN and "csrftoken" in [i.get("name") for i in soup.find_all("input")]:
+        data["csrftoken"] = CSRFTOKEN
+    if CONNECT_ID:
+        data.setdefault("connect_id", CONNECT_ID)
+
+    headers = {
+        "Referer": last_get.url,
+        "Origin": f"{SCHEME}://{SSO_HOST}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    try:
+        r = s.post(form_action, data=data, headers=headers, timeout=30, allow_redirects=True)
+        dbg(f"POST {form_action} -> {r.status_code} | final: {r.url}")
+    except Exception as e:
+        dbg(f"POST-Login fehlgeschlagen: {e}")
+        return False
+
+    # Nach Login die Highscore-Seite erneut aufrufen
+    return try_highscore()
+
+# ==== Ablauf ====
+# 1) Direkt versuchen (evtl. reicht Session/Cookies)
+if try_highscore():
+    sys.exit(0)
+
+# 2) Wenn fehlgeschlagen und Username/Passwort vorhanden -> Login-Fallback
+if USERNAME and PASSWORD:
+    ok = attempt_login()
+    if ok:
+        sys.exit(0)
+
+print("Login fehlgeschlagen. Cookie + Credentials halfen nicht.")
+sys.exit(0)  # nicht als Fehler beenden, damit der Job "grün" bleibt
