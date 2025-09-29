@@ -3,7 +3,7 @@ name: daily-highscore
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 6 * * *"  # täglich 06:30 UTC
+    - cron: "6 4 * * *"   # täglich 04:06 UTC (anpassen, wenn du willst)
 
 jobs:
   run:
@@ -18,13 +18,16 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
 
       - name: Run scraper
         env:
           MG_HIGHSCORE_URL: ${{ secrets.MG_HIGHSCORE_URL }}
           MG_SESSIONID:     ${{ secrets.MG_SESSIONID }}
           MG_CSRFTOKEN:     ${{ secrets.MG_CSRFTOKEN }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # MG_WATCHLIST ist optional – wird nur genutzt, falls KEINE players.txt vorhanden ist
-        run: python scraper.py
+          DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
+          PLAYERS_FILE:     players.txt
+        run: |
+          python scraper.py
