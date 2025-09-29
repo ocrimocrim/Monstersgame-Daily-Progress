@@ -1,11 +1,12 @@
 name: daily-highscore
 
 on:
-  # täglicher Lauf (UTC)
   schedule:
-    - cron: "13 5 * * *"
-  # manuell startbar
-  workflow_dispatch:
+    - cron: "13 5 * * *"   # täglicher Lauf (UTC)
+  workflow_dispatch:        # manuell startbar
+
+permissions:
+  contents: write           # <— nötig zum Committen des state.json
 
 jobs:
   run:
@@ -14,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true   # nutzt den GITHUB_TOKEN für push
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,15 +29,28 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run scraper
-        # >>> HIER werden alle Secrets/ENVs in den Prozess gegeben <<<
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MG_USERNAME:     ${{ secrets.MG_USERNAME }}
           MG_PASSWORD:     ${{ secrets.MG_PASSWORD }}
-          MG_COOKIE:       ${{ secrets.MG_COOKIE }}       # optional (int3 PHPSESSID)
-          MG_PHPSESSID:    ${{ secrets.MG_PHPSESSID }}    # optional (int3 PHPSESSID)
-          MG_SESSIONID:    ${{ secrets.MG_SESSIONID }}    # optional (moonid sessionid)
-          MG_CSRFTOKEN:    ${{ secrets.MG_CSRFTOKEN }}    # optional (moonid csrftoken)
-          MG_CONNECT_ID:   ${{ secrets.MG_CONNECT_ID }}   # optional (standard 240)
-          MG_DEBUG:        ${{ secrets.MG_DEBUG }}        # optional: 1 für Debug-Logs
-        run: python scraper.py
+          MG_COOKIE:       ${{ secrets.MG_COOKIE }}
+          MG_PHPSESSID:    ${{ secrets.MG_PHPSESSID }}
+          MG_SESSIONID:    ${{ secrets.MG_SESSIONID }}
+          MG_CSRFTOKEN:    ${{ secrets.MG_CSRFTOKEN }}
+          MG_CONNECT_ID:   ${{ secrets.MG_CONNECT_ID }}
+          MG_DEBUG:        ${{ secrets.MG_DEBUG }}      # bei dir schon = 1
+        run: |
+          mkdir -p data
+          python scraper.py
+
+      - name: Persist state.json ins Repo committen
+        run: |
+          if [ -f data/state.json ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/state.json
+            git commit -m "chore: update state $(date -u +'%F %T') [skip ci]" || echo "Keine Änderungen"
+            git push
+          else
+            echo "Keine state.json erzeugt."
+          fi
