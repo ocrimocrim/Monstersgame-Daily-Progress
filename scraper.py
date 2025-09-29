@@ -11,15 +11,17 @@ PLAYERS_FILE = "players.txt"
 
 # moonID
 MOONID_BASE = "https://moonid.net"
-MOONID_CONNECT_ID = os.environ.get("MG_CONNECT_ID", "240")  # bei Bedarf im Repo als Secret setzen
-MOONID_LOGIN_URL = f"{MOONID_BASE}/account/login/?next=/api/account/connect/{MOONID_CONNECT_ID}/"
-MOONID_CONNECT_URL = f"{MOONID_BASE}/api/account/connect/{MOONID_CONNECT_ID}/"
+# robust: nutze Secret, ansonsten 240; wenn Secret existiert aber leer ist, greift ebenfalls 240
+MG_CONNECT_ID = os.getenv("MG_CONNECT_ID") or "240"
+MOONID_LOGIN_URL  = f"{MOONID_BASE}/account/login/?next=/api/account/connect/{MG_CONNECT_ID}/"
+MOONID_CONNECT_URL = f"{MOONID_BASE}/api/account/connect/{MG_CONNECT_ID}/"
 
 # Secrets
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
 MG_USERNAME = os.environ.get("MG_USERNAME", "")
 MG_PASSWORD = os.environ.get("MG_PASSWORD", "")
-MG_COOKIE = os.environ.get("MG_COOKIE", "")  # optionaler direkter PHPSESSID Cookie auf int3 Domain
+# optional: direkter Session-Cookie auf der int3-Domain, falls du den Connect-Flow umgehen willst
+MG_COOKIE = os.environ.get("MG_COOKIE", "")
 
 SESSION_HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -49,8 +51,7 @@ def read_players():
     ]
     if os.path.exists(PLAYERS_FILE):
         with open(PLAYERS_FILE, "r", encoding="utf-8") as f:
-            names = [line.strip() for line in f if line.strip()]
-            return names
+            return [line.strip() for line in f if line.strip()]
     return default_players
 
 def load_state():
@@ -71,7 +72,7 @@ def clean_int(text):
     return int(t) if t else 0
 
 def login_via_moonid(session: requests.Session):
-    # Loginseite holen und CSRF plus next übernehmen
+    # 1) Login-Seite holen, CSRF und next einsammeln
     r = session.get(MOONID_LOGIN_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "lxml")
@@ -100,15 +101,15 @@ def login_via_moonid(session: requests.Session):
     payload["username"] = MG_USERNAME
     payload["password"] = MG_PASSWORD
 
-    # Login absenden
+    # 2) Login absenden
     r2 = session.post(login_url, data=payload, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r2.raise_for_status()
 
-    # Explizit den Connect Endpoint aufrufen, damit Cookies auf int3 gesetzt werden
+    # 3) Explizit den Connect-Endpoint aufrufen, damit Cookies auf der Spiel-Domain gesetzt werden
     r3 = session.get(MOONID_CONNECT_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r3.raise_for_status()
 
-    # Jetzt sollte die Session auf int3 aktiv sein
+    # 4) Prüfung: Highscore auf int3 laden
     r4 = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30, allow_redirects=True)
     r4.raise_for_status()
     if "Logout" not in r4.text and "logout" not in r4.text:
@@ -181,22 +182,17 @@ def parse_table(html):
 
 def pick_players(rows, watchlist):
     names_norm = {n.strip(): n.strip() for n in watchlist}
-    out = {}
-    for r in rows:
-        if r["name"] in names_norm:
-            out[r["name"]] = r
-    return out
+    return {r["name"]: r for r in rows if r["name"] in names_norm}
 
 def build_message(today, prev_players, today_players):
-    report = []
-    ranked = []
+    report, ranked = [], []
     for name, now in today_players.items():
         prev = prev_players.get(name, {})
-        d_gold = now["gold"] - prev.get("gold", 0)
-        d_wins = now["wins"] - prev.get("wins", 0)
-        d_losses = now["losses"] - prev.get("losses", 0)
-        d_anc = now["anc"] - prev.get("anc", 0)
-        d_lvl = now["level"] - prev.get("level", 0)
+        d_gold   = now["gold"]  - prev.get("gold", 0)
+        d_wins   = now["wins"]  - prev.get("wins", 0)
+        d_losses = now["losses"]- prev.get("losses", 0)
+        d_anc    = now["anc"]   - prev.get("anc", 0)
+        d_lvl    = now["level"] - prev.get("level", 0)
 
         line = f"{name} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
         extras = []
@@ -209,9 +205,8 @@ def build_message(today, prev_players, today_players):
         report.append((name, d_gold, line))
         ranked.append((name, d_gold))
 
-    top_name, top_gold = None, None
-    if ranked:
-        top_name, top_gold = max(ranked, key=lambda x: x[1])
+    top = max(ranked, key=lambda x: x[1]) if ranked else (None, None)
+    top_name, top_gold = top
 
     intro = random.choice(MOTIVATION)
     date_str = today.strftime("%Y-%m-%d")
@@ -227,8 +222,7 @@ def send_discord(msg):
         print("Kein DISCORD_WEBHOOK gesetzt. Nachricht wird nur ausgegeben.")
         print(msg)
         return
-    payload = {"content": msg}
-    r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=30)
+    r = requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=30)
     r.raise_for_status()
 
 def main():
@@ -241,7 +235,7 @@ def main():
         s.headers.update(SESSION_HEADERS)
 
         if MG_COOKIE:
-            # Direkter PHPSESSID Cookie für int3 Domain als Fallback
+            # Fallback: vorhandene Session direkt nutzen
             s.cookies.set("PHPSESSID", MG_COOKIE, domain="int3.monstersgame.moonid.net")
         else:
             login_via_moonid(s)
@@ -257,11 +251,7 @@ def main():
     msg = build_message(today, prev_players, today_players)
     send_discord(msg)
 
-    new_players = {name: today_players[name] for name in today_players}
-    new_state = {
-        "date": today.isoformat(),
-        "players": new_players
-    }
+    new_state = {"date": today.isoformat(), "players": {n: today_players[n] for n in today_players}}
     save_state(new_state)
     print("Protokoll gesendet und State gespeichert.")
 
