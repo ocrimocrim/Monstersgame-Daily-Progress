@@ -1,19 +1,16 @@
-name: daily-highscore
-
+name: run
 on:
-  schedule:
-    - cron: "0 20 * * *"  # jeden Tag um 20:00 UTC
   workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *"   # täglich 07:00 UTC
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -24,12 +21,15 @@ jobs:
 
       - name: Run scraper
         env:
-          MG_HIGHSCORE_URL: ${{ secrets.MG_HIGHSCORE_URL }}
-          MG_WATCHLIST: ${{ secrets.MG_WATCHLIST }}
-          MG_SESSIONID: ${{ secrets.MG_SESSIONID }}
-          MG_USERNAME: ${{ secrets.MG_USERNAME }}
-          MG_PASSWORD: ${{ secrets.MG_PASSWORD }}
-          MG_CSRFTOKEN: ${{ secrets.MG_CSRFTOKEN }}
-          MG_CONNECT_ID: ${{ secrets.MG_CONNECT_ID }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python scraper.py
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MG_USERNAME:     ${{ secrets.MG_USERNAME }}
+          MG_PASSWORD:     ${{ secrets.MG_PASSWORD }}
+          MG_SESSIONID:    ${{ secrets.MG_SESSIONID }}     # optional
+          MG_PHPSESSID:    ${{ secrets.MG_PHPSESSID }}     # optional
+          MG_COOKIE:       ${{ secrets.MG_COOKIE }}        # optional (Alias PHPSESSID)
+          MG_CSRFTOKEN:    ${{ secrets.MG_CSRFTOKEN }}     # optional
+          MG_CONNECT_ID:   ${{ secrets.MG_CONNECT_ID }}    # optional (Default 240)
+          MG_WATCHLIST:    ${{ secrets.MG_WATCHLIST }}     # optional, wenn keine players.txt
+          MG_DEBUG:        ${{ secrets.MG_DEBUG }}         # optional, "1" für Debug
+        run: |
+          python scraper.py
