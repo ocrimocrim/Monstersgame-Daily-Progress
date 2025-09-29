@@ -37,6 +37,16 @@ MOTIVATION = [
     "Wolves, hört zu. Hier kommt die Beute."
 ]
 
+# ---------- Utils ----------
+
+def norm_name(s: str) -> str:
+    if s is None:
+        return ""
+    # entferne NBSP, mehrfach-Spaces, trimmen
+    t = s.replace("\xa0", " ").strip()
+    t = re.sub(r"\s+", " ", t)
+    return t
+
 def read_players():
     default_players = [
         "[DDoV] Slevin",
@@ -51,8 +61,8 @@ def read_players():
     ]
     if os.path.exists(PLAYERS_FILE):
         with open(PLAYERS_FILE, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
-    return default_players
+            return [norm_name(line) for line in f if line.strip()]
+    return [norm_name(x) for x in default_players]
 
 def load_state():
     if os.path.exists(STATE_PATH):
@@ -70,6 +80,8 @@ def clean_int(text):
         return 0
     t = re.sub(r"[^\d]", "", str(text))
     return int(t) if t else 0
+
+# ---------- Login ----------
 
 def login_via_moonid(session: requests.Session):
     r = session.get(MOONID_LOGIN_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
@@ -111,10 +123,14 @@ def login_via_moonid(session: requests.Session):
     if "Logout" not in r4.text and "logout" not in r4.text:
         raise RuntimeError("Login okay, aber Session auf Spielserver nicht aktiv. Prüfe MG_CONNECT_ID oder nutze MG_COOKIE.")
 
+# ---------- Fetch ----------
+
 def fetch_highscore(session: requests.Session):
     r = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30)
     r.raise_for_status()
     return r.text
+
+# ---------- Parser 1: HTML-Table ----------
 
 def parse_table_bs(html):
     soup = BeautifulSoup(html, "lxml")
@@ -163,7 +179,7 @@ def parse_table_bs(html):
         def get(col):
             return tds[cols[col]].get_text(strip=True) if col in cols else ""
         row = {
-            "name": get("name"),
+            "name": norm_name(get("name")),
             "level": clean_int(get("level")),
             "loot": clean_int(get("loot")),
             "wins": clean_int(get("wins")),
@@ -175,16 +191,19 @@ def parse_table_bs(html):
             data.append(row)
     return data
 
+# ---------- Parser 2: pandas.read_html ----------
+
 def parse_table_pandas(html):
-    # Fallback: jede Tabelle lesen und passende Spalten suchen
-    tables = pd.read_html(html, flavor="lxml")
+    try:
+        tables = pd.read_html(html, flavor="lxml")
+    except ValueError:
+        return []
     for df in tables:
         cols = [str(c).strip().lower() for c in df.columns]
         has_name = any("name" in c for c in cols)
         has_gold = any("gold" in c for c in cols)
         if not (has_name and has_gold):
             continue
-        # Spaltennamen zuordnen
         def col_idx(keys):
             for i, c in enumerate(cols):
                 if any(k in c for k in keys):
@@ -204,7 +223,7 @@ def parse_table_pandas(html):
             continue
         data = []
         for _, row in df.iterrows():
-            name = str(row.iloc[idx["name"]]).strip()
+            name = norm_name(str(row.iloc[idx["name"]]))
             if not name or name.lower() == "name":
                 continue
             data.append({
@@ -220,16 +239,57 @@ def parse_table_pandas(html):
             return data
     return []
 
+# ---------- Parser 3: Regex über reinen Text ----------
+
+ROW_RX = re.compile(
+    r"""
+    ^\s*(\d+)\.\s+                              # Rang
+    (Vampire|Werewolf)\s+                       # Rasse
+    (.+?)\s+                                    # Name (greedy, bis Level)
+    (\d+)\s+                                    # Lvl
+    ([\d\.,]+)\s+                               # Loot
+    ([\d\.,]+)\s+                               # Bites
+    ([\d\.,]+)\s+                               # W
+    ([\d\.,]+)\s+                               # L
+    ([\d\.,]+)\s+                               # Anc. +
+    ([\d\.,]+)\s+Gold                           # Gold + ... Gold
+    """,
+    re.VERBOSE | re.MULTILINE
+)
+
+def parse_table_text(html):
+    # Gesamten sichtbaren Text extrahieren
+    soup = BeautifulSoup(html, "lxml")
+    text = soup.get_text("\n", strip=True)
+    rows = []
+    for m in ROW_RX.finditer(text):
+        name = norm_name(m.group(3))
+        rows.append({
+            "name": name,
+            "level": clean_int(m.group(4)),
+            "loot": clean_int(m.group(5)),
+            # m.group(6) = bites, ignorieren
+            "wins": clean_int(m.group(7)),
+            "losses": clean_int(m.group(8)),
+            "anc": clean_int(m.group(9)),
+            "gold": clean_int(m.group(10)),
+        })
+    return rows
+
+# ---------- Orchestrierung ----------
+
 def parse_table(html):
     rows = parse_table_bs(html)
     if rows:
         return rows
-    # Fallback
-    return parse_table_pandas(html)
+    rows = parse_table_pandas(html)
+    if rows:
+        return rows
+    return parse_table_text(html)
 
 def pick_players(rows, watchlist):
-    watch = {n.strip(): True for n in watchlist}
-    return {r["name"]: r for r in rows if r["name"] in watch}
+    watch = {norm_name(n): True for n in watchlist}
+    return {r["name"]: r for r in rows if norm_name(r["name"]) in watch}
 
 def build_message(today, prev_players, today_players):
     report, ranked = [], []
@@ -286,18 +346,16 @@ def main():
             s.cookies.set("PHPSESSID", MG_COOKIE, domain="int3.monstersgame.moonid.net")
         else:
             login_via_moonid(s)
-
         html = fetch_highscore(s)
 
     rows = parse_table(html)
     today_players = pick_players(rows, watchlist)
 
-    # Debug-Dump bei Problemen
-    if not rows or not today_players:
-        pathlib.Path("data").mkdir(parents=True, exist_ok=True)
-        with open(DEBUG_HTML, "w", encoding="utf-8") as f:
-            f.write(html[:500000])  # capped
-        print(f"Debug gespeichert in {DEBUG_HTML}. Gefundene Gesamtzeilen {len(rows)}. Gefundene Spieler {len(today_players)}.")
+    # Debug-Dump, falls nötig
+    pathlib.Path("data").mkdir(parents=True, exist_ok=True)
+    with open(DEBUG_HTML, "w", encoding="utf-8") as f:
+        f.write(html[:600000])
+    print(f"Debug gespeichert in {DEBUG_HTML}. Gesamtzeilen {len(rows)}. Treffer Watchlist {len(today_players)}.")
 
     state = load_state()
     prev_players = state.get("players", {})
