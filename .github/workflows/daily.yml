@@ -1,9 +1,9 @@
 name: daily-highscore
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "6 4 * * *"   # täglich 04:06 UTC (anpassen, wenn du willst)
+    - cron: "0 20 * * *"  # jeden Tag um 20:00 UTC
+  workflow_dispatch:
 
 jobs:
   run:
@@ -25,9 +25,11 @@ jobs:
       - name: Run scraper
         env:
           MG_HIGHSCORE_URL: ${{ secrets.MG_HIGHSCORE_URL }}
-          MG_SESSIONID:     ${{ secrets.MG_SESSIONID }}
-          MG_CSRFTOKEN:     ${{ secrets.MG_CSRFTOKEN }}
-          DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
-          PLAYERS_FILE:     players.txt
-        run: |
-          python scraper.py
+          MG_WATCHLIST: ${{ secrets.MG_WATCHLIST }}
+          MG_SESSIONID: ${{ secrets.MG_SESSIONID }}
+          MG_USERNAME: ${{ secrets.MG_USERNAME }}
+          MG_PASSWORD: ${{ secrets.MG_PASSWORD }}
+          MG_CSRFTOKEN: ${{ secrets.MG_CSRFTOKEN }}
+          MG_CONNECT_ID: ${{ secrets.MG_CONNECT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scraper.py
