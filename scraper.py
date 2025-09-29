@@ -3,242 +3,248 @@ from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
-# ------------------------------------------------------------
-# Basis-URLs & Dateien
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Basis-URLs und Pfade
+# ---------------------------------------------------------------------
 BASE_URL = "https://int3.monstersgame.moonid.net"
 HIGHSCORE_URL = BASE_URL + "/index.php?ac=highscore&sac=spieler&highrasse=0&count=0&filter=gold_won&direction="
 STATE_PATH = "data/state.json"
 PLAYERS_FILE = "players.txt"
 
-# moonID Connect
+# moonID / Connect
 MOONID_BASE = "https://moonid.net"
-MG_CONNECT_ID = os.getenv("MG_CONNECT_ID") or "240"  # robustes Fallback
-MOONID_LOGIN_URL   = f"{MOONID_BASE}/account/login/?next=/api/account/connect/{MG_CONNECT_ID}/"
+MG_CONNECT_ID = os.getenv("MG_CONNECT_ID") or "240"
+MOONID_LOGIN_URL  = f"{MOONID_BASE}/account/login/?next=/api/account/connect/{MG_CONNECT_ID}/"
 MOONID_CONNECT_URL = f"{MOONID_BASE}/api/account/connect/{MG_CONNECT_ID}/"
 
-# ------------------------------------------------------------
 # Secrets / ENV
-# ------------------------------------------------------------
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
-
-# Login-Credentials (Fallback, falls keine gültigen Cookies)
 MG_USERNAME = os.environ.get("MG_USERNAME", "")
 MG_PASSWORD = os.environ.get("MG_PASSWORD", "")
-
-# Cookies aus deinen DevTools / GitHub-Secrets
-# - MG_PHPSESSID  => Cookie-Wert von "PHPSESSID" (Domain: int3.monstersgame.moonid.net)
-# - MG_SESSIONID  => Cookie-Wert von "sessionid"  (Domain: moonid.net)
-MG_PHPSESSID = os.environ.get("MG_PHPSESSID", "").strip()
-MG_SESSIONID = os.environ.get("MG_SESSIONID", "").strip()
-
-# Optional: CSRF (aus moonid.net Cookies), nur falls wirklich nötig
-MG_CSRFTOKEN = os.environ.get("MG_CSRFTOKEN", "").strip()
-
-# Debug-Ausgaben einschalten mit Secret MG_DEBUG=1
-DEBUG = os.environ.get("MG_DEBUG", "") == "1"
+# Sessions/Cookies (alle optional – wenn gesetzt, werden sie genutzt)
+MG_SESSIONID   = os.environ.get("MG_SESSIONID", "")     # sessionid auf int3
+MG_PHPSESSID   = os.environ.get("MG_PHPSESSID", "")     # PHPSESSID auf int3
+MG_COOKIE      = os.environ.get("MG_COOKIE", "")        # Alias: direkter PHPSESSID-Wert
+MG_CSRFTOKEN   = os.environ.get("MG_CSRFTOKEN", "")     # falls moonid/seite es verlangt
+MG_DEBUG       = os.environ.get("MG_DEBUG", "")         # "1" = ausführliches Log
 
 SESSION_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
     "Connection": "keep-alive",
 }
 
 MOTIVATION = [
-    "Stay sharp, wolves!",
-    "Another day, another loot.",
-    "Keep hunting!",
-    "Gold never sleeps.",
+    "Zeit, Beute zu zählen!",
+    "Der Mond steht hoch – Zahlen auch.",
+    "Wieder jemand reich geworden?",
+    "Daily-Check: Wer hat kassiert?",
 ]
 
-# ------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------
-def log(msg: str):
-    if DEBUG:
+# ---------------------------------------------------------------------
+# Util
+# ---------------------------------------------------------------------
+def dbg(msg: str):
+    if MG_DEBUG == "1":
         print(f"[DEBUG] {msg}")
 
 def ensure_dirs():
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
 
-def read_players():
-    # Nur die Datei players.txt; wenn nicht vorhanden, leere Liste
+def load_players_from_file():
+    default_players = []
     if os.path.exists(PLAYERS_FILE):
         with open(PLAYERS_FILE, "r", encoding="utf-8") as f:
             return [line.strip() for line in f if line.strip()]
-    return []
+    # Fallback: MG_WATCHLIST aus ENV (Komma-getrennt)
+    wl = os.environ.get("MG_WATCHLIST", "")
+    if wl.strip():
+        return [p.strip() for p in wl.split(",") if p.strip()]
+    return default_players
+
+def norm_name(s: str) -> str:
+    # robust gegen Groß/Klein, doppelte/anhängende Leerzeichen
+    s = s.strip()
+    s = re.sub(r"\s+", " ", s)
+    return s.lower()
 
 def load_state():
-    try:
+    if os.path.exists(STATE_PATH):
         with open(STATE_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
-        return {"date": "", "players": {}}
+    return {"date": "", "players": {}}
 
 def save_state(state):
     ensure_dirs()
     with open(STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-def parse_int(text):
-    # "1,399,007" -> 1399007
-    return int(re.sub(r"[^\d]", "", text)) if re.search(r"\d", text) else 0
+def to_int(numstr: str) -> int:
+    # entfernt Punkt/Komma-Tausendertrennungen und sonstige Nicht-Ziffern
+    t = re.sub(r"[^\d]", "", numstr or "")
+    return int(t) if t else 0
 
-def normalized_name(s):
-    # Normalisiert wie besprochen (Leerzeichen, Klammern, Sonderzeichen tolerant)
-    return re.sub(r"\s+", " ", s).strip().lower()
-
-def login_ok(html: str) -> bool:
-    # Simpler Check: es gibt den Highscore-Header oder Logout-Links
-    return ("tdh_highscore" in html) or ("Logout" in html) or ("logout" in html)
-
-# ------------------------------------------------------------
-# Login-Flow (Cookie-Fallback -> moonID Login)
-# ------------------------------------------------------------
-def prime_cookies(session: requests.Session):
-    """
-    Setzt vorhandene Cookies aus Secrets:
-      - PHPSESSID auf int3.monstersgame.moonid.net
-      - sessionid / csrftoken auf moonid.net (falls vorhanden)
-    """
+# ---------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------
+def set_known_cookies(session: requests.Session):
+    # Falls vorhanden, direkt Session-Cookies auf int3-Domain setzen
+    # (wir setzen beide Varianten, wenn vorhanden)
     if MG_PHPSESSID:
+        dbg("Setze Cookie: PHPSESSID (int3)")
         session.cookies.set("PHPSESSID", MG_PHPSESSID, domain="int3.monstersgame.moonid.net")
-        log("Set cookie: PHPSESSID (int3)")
-
     if MG_SESSIONID:
-        session.cookies.set("sessionid", MG_SESSIONID, domain="moonid.net")
-        log("Set cookie: sessionid (moonid.net)")
+        dbg("Setze Cookie: sessionid (int3)")
+        session.cookies.set("sessionid", MG_SESSIONID, domain="int3.monstersgame.moonid.net")
+    if MG_COOKIE and not MG_PHPSESSID:
+        # Alias – einige Nutzer verwenden MG_COOKIE als PHPSESSID
+        dbg("Setze Cookie: PHPSESSID aus MG_COOKIE (int3)")
+        session.cookies.set("PHPSESSID", MG_COOKIE, domain="int3.monstersgame.moonid.net")
 
-    if MG_CSRFTOKEN:
-        session.cookies.set("csrftoken", MG_CSRFTOKEN, domain="moonid.net")
-        log("Set cookie: csrftoken (moonid.net)")
+def looks_logged_in(html: str) -> bool:
+    if not html:
+        return False
+    # sehr simple Heuristik: Highscore-Tabellenheader oder Logout-Link
+    return ("bghighscore" in html) or ("Logout" in html) or ("logout" in html)
 
-def try_highscore(session: requests.Session) -> str | None:
-    r = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30, allow_redirects=True)
-    log(f"GET highscore -> {r.status_code} (final URL: {r.url})")
-    if r.status_code == 200 and login_ok(r.text):
-        return r.text
-    return None
-
-def login_via_moonid(session: requests.Session) -> str | None:
-    """
-    Führt den vollständigen moonID-Login + Connect aus und gibt Highscore-HTML zurück,
-    wenn alles klappt. Sonst None.
-    """
-    if not MG_USERNAME or not MG_PASSWORD:
-        log("Kein MG_USERNAME/MG_PASSWORD gesetzt – kann keinen Login durchführen.")
-        return None
-
-    # 1) Login-Seite aufrufen (holt auch CSRF)
+def login_via_moonid(session: requests.Session):
+    # 1) Login-Seite holen
+    dbg(f"GET {MOONID_LOGIN_URL}")
     r = session.get(MOONID_LOGIN_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-    log(f"GET login page -> {r.status_code} (final URL: {r.url})")
     r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    soup = BeautifulSoup(r.text, "lxml")
+    # CSRF holen
+    csrf = ""
+    csrf_el = soup.find("input", attrs={"name": "csrfmiddlewaretoken"})
+    if csrf_el and csrf_el.get("value"):
+        csrf = csrf_el["value"]
+    elif MG_CSRFTOKEN:
+        csrf = MG_CSRFTOKEN  # falls per Secret vorgegeben
+    if not csrf:
+        dbg("Kein CSRF gefunden – versuchen wir es trotzdem.")
+
+    # Login-Form-URL (action)
     form = soup.find("form")
-    if not form:
-        log("Login-Formular nicht gefunden.")
-        return None
+    if not form or not form.get("action"):
+        raise RuntimeError("Login-Form nicht gefunden.")
+    login_url = form.get("action")
+    if login_url.startswith("/"):
+        login_url = MOONID_BASE + login_url
 
-    payload = {}
-    for inp in form.find_all("input"):
-        name = (inp.get("name") or "").strip()
-        value = inp.get("value") or ""
-        if name:
-            payload[name] = value
+    # 2) Login absenden
+    payload = {"username": MG_USERNAME, "password": MG_PASSWORD}
+    if csrf:
+        payload["csrfmiddlewaretoken"] = csrf
 
-    # CSRF-Feld heuristisch finden
-    if "csrfmiddlewaretoken" not in payload:
-        # manche Installationen nutzen andere Namen
-        for k in list(payload.keys()):
-            if k.lower().startswith("csrf"):
-                payload["csrfmiddlewaretoken"] = payload[k]
-                break
+    headers = SESSION_HEADERS.copy()
+    if csrf:
+        headers["Referer"] = MOONID_LOGIN_URL
 
-    # Verbindlich Benutzer & Passwort setzen
-    payload["username"] = MG_USERNAME
-    payload["password"] = MG_PASSWORD
-
-    # 2) POST Login
-    action = form.get("action") or MOONID_LOGIN_URL
-    login_url = action if action.startswith("http") else (MOONID_BASE.rstrip("/") + "/" + action.lstrip("/"))
-    r2 = session.post(login_url, data=payload, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-    log(f"POST login -> {r2.status_code} (final URL: {r2.url})")
+    dbg(f"POST {login_url}")
+    r2 = session.post(login_url, data=payload, headers=headers, timeout=30, allow_redirects=True)
     r2.raise_for_status()
 
-    # 3) Connect aufrufen, damit Cookies auf int3 landen
+    # 3) Connect aufrufen (setzt Cookies für int3)
+    dbg(f"GET {MOONID_CONNECT_URL}")
     r3 = session.get(MOONID_CONNECT_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
-    log(f"GET connect -> {r3.status_code} (final URL: {r3.url})")
     r3.raise_for_status()
 
-    # 4) Test: Highscore holen
-    return try_highscore(session)
+    # 4) Testaufruf Highscore
+    dbg(f"GET {HIGHSCORE_URL} (Login-Check)")
+    r4 = session.get(HIGHSCORE_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
+    r4.raise_for_status()
+    if not looks_logged_in(r4.text):
+        raise RuntimeError("Login offenbar fehlgeschlagen (keine Highscore-Tabelle sichtbar).")
 
-# ------------------------------------------------------------
-# Parser für die Highscore-Tabelle
-# ------------------------------------------------------------
+def get_highscore_html(session: requests.Session) -> str:
+    dbg(f"GET {HIGHSCORE_URL}")
+    r = session.get(HIGHSCORE_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
+    r.raise_for_status()
+    return r.text
+
+# ---------------------------------------------------------------------
+# Parsen der Highscore-Tabelle
+# ---------------------------------------------------------------------
 def parse_highscore(html: str):
-    soup = BeautifulSoup(html, "lxml")
-    # größte Tabelle nehmen (robust)
+    """
+    Erwartet HTML (mit Tabelle). Nutzt den eingebauten 'html.parser',
+    damit keine externen Parser (lxml) nötig sind.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
     tables = soup.find_all("table")
     if not tables:
-        raise RuntimeError("Konnte keine Tabelle finden (HTML-Struktur geändert?).")
-    t = max(tables, key=lambda tb: len(tb.find_all("tr")))
+        raise RuntimeError("Konnte keine Rangliste parsen (keine Tabelle gefunden).")
 
-    rows = []
-    for tr in t.find_all("tr"):
+    # Größte Tabelle (meiste TRs) nehmen
+    table = max(tables, key=lambda t: len(t.find_all("tr")))
+    rows_out = []
+
+    for tr in table.find_all("tr"):
         tds = tr.find_all("td")
-        if len(tds) < 10:
-            continue
-        # Spalten: #, Race, Name, Lvl, Loot, Bites, W, L, Anc.+, Gold+
-        name_a = tds[2].find("a")
-        name = (name_a.text if name_a else tds[2].get_text()).strip()
+        if len(tds) != 10:
+            continue  # Header oder unpassende Zeilen überspringen
+
+        # Spalten lt. Beispiel:
+        # 0 Rang, 1 Icon, 2 Name, 3 Lvl, 4 Loot, 5 Bites, 6 W, 7 L, 8 Anc.+, 9 Gold +
+        # Name:
+        name_el = tds[2].find("a")
+        name = (name_el.get_text(strip=True) if name_el else tds[2].get_text(strip=True))
+
+        # Metriken:
+        lvl   = to_int(tds[3].get_text())
+        wins  = to_int(tds[6].get_text())
+        losses= to_int(tds[7].get_text())
+        anc   = to_int(tds[8].get_text())
+        gold  = to_int(tds[9].get_text())  # "Gold +" Spalte
+
         if not name:
             continue
 
-        row = {
+        rows_out.append({
             "name": name,
-            "level": parse_int(tds[3].get_text()),
-            "loot": parse_int(tds[4].get_text()),
-            "bites": parse_int(tds[5].get_text()),
-            "wins": parse_int(tds[6].get_text()),
-            "losses": parse_int(tds[7].get_text()),
-            "anc": parse_int(tds[8].get_text()),
-            "gold": parse_int(tds[9].get_text()),
-        }
-        rows.append(row)
+            "level": lvl,
+            "wins": wins,
+            "losses": losses,
+            "anc": anc,
+            "gold": gold,
+        })
 
-    if not rows:
-        raise RuntimeError("Konnte keine Rangliste parsen (keine Zeilen gefunden).")
-    return rows
+    if not rows_out:
+        raise RuntimeError("Konnte keine Rangliste parsen (Tabelle leer oder Struktur geändert).")
 
-# ------------------------------------------------------------
-# Watchlist-Filter & Bericht
-# ------------------------------------------------------------
+    return rows_out
+
+# ---------------------------------------------------------------------
+# Auswahl + Report
+# ---------------------------------------------------------------------
 def pick_players(rows, watchlist):
-    wl = {normalized_name(n): n.strip() for n in watchlist}
+    wl_map = {norm_name(n): n.strip() for n in watchlist}
     out = {}
     for r in rows:
-        key = normalized_name(r["name"])
-        if key in wl:
-            out[wl[key]] = r
+        key = norm_name(r["name"])
+        if key in wl_map:
+            out[wl_map[key]] = r  # Original-Schreibweise aus Watchlist beibehalten
     return out
 
 def build_message(today, prev_players, today_players):
-    report, ranked = [], []
+    report = []
+    ranked = []
+
     for name, now in today_players.items():
         prev = prev_players.get(name, {})
-        d_gold   = now["gold"]   - prev.get("gold", 0)
-        d_wins   = now["wins"]   - prev.get("wins", 0)
-        d_losses = now["losses"] - prev.get("losses", 0)
-        d_anc    = now["anc"]    - prev.get("anc", 0)
-        d_lvl    = now["level"]  - prev.get("level", 0)
+        d_gold   = now["gold"]  - prev.get("gold", 0)
+        d_wins   = now["wins"]  - prev.get("wins", 0)
+        d_losses = now["losses"]- prev.get("losses", 0)
+        d_anc    = now["anc"]   - prev.get("anc", 0)
+        d_lvl    = now["level"] - prev.get("level", 0)
 
-        line = f"{name} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
         extras = []
-        if d_lvl:  extras.append(f"lvl +{d_lvl}")
-        if d_anc:  extras.append(f"anc +{d_anc}")
+        if d_lvl:    extras.append(f"Lvl {('+' if d_lvl>=0 else '')}{d_lvl}")
+        if d_anc:    extras.append(f"Anc {('+' if d_anc>=0 else '')}{d_anc}")
+        line = f"{name} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
         if extras:
             line += " (" + ", ".join(extras) + ")"
 
@@ -252,63 +258,71 @@ def build_message(today, prev_players, today_players):
     intro = random.choice(MOTIVATION)
     date_str = today.strftime("%Y-%m-%d")
 
-    lines = [f"**{intro}**  —  *{date_str}*"]
+    lines = [f"{intro} — {date_str}", ""]
     if top_name is not None:
-        lines.append(f"Top looter today: **{top_name}** (+{top_gold} Gold)")
+        lines.append(f"Top loot today: {top_name} (+{top_gold} Gold)")
+        lines.append("")
 
-    for _, _, ln in sorted(report, key=lambda x: x[0].lower()):
-        lines.append("• " + ln)
+    for _, _, l in sorted(report, key=lambda x: x[0].lower()):
+        lines.append(l)
 
     return "\n".join(lines)
 
 def send_discord(msg: str):
     if not DISCORD_WEBHOOK:
-        print("Kein DISCORD_WEBHOOK gesetzt. Nachricht wird nur ausgegeben:")
+        print("Kein DISCORD_WEBHOOK gesetzt. Nachricht wird nur ausgegeben.\n")
         print(msg)
         return
     r = requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=30)
     r.raise_for_status()
 
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Main
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------
 def main():
-    watchlist = read_players()
-    if not watchlist:
-        print("players.txt ist leer oder fehlt – nichts zu tun.")
-        return
+    watch = load_players_from_file()
+    if not watch:
+        print("Keine Spieler in players.txt oder MG_WATCHLIST gefunden – nichts zu tun.")
+        sys.exit(0)
 
-    prev_state = load_state()
-    prev_players = prev_state.get("players", {})
+    state = load_state()
+    prev_players = state.get("players", {})
     today = datetime.now(timezone.utc)
 
     with requests.Session() as s:
         s.headers.update(SESSION_HEADERS)
 
-        # 1) vorhandene Cookies setzen
-        prime_cookies(s)
+        # 1) Erst bekannte Cookies versuchen
+        set_known_cookies(s)
 
-        # 2) versuchen, direkt Highscore zu laden
-        html = try_highscore(s)
+        # 2) Highscore laden
+        try:
+            html = get_highscore_html(s)
+            if not looks_logged_in(html):
+                raise RuntimeError("Nicht eingeloggt, versuche Username/Passwort...")
+        except Exception as e:
+            dbg(f"Erster Versuch fehlgeschlagen: {e}")
+            html = ""
 
-        # 3) falls das nicht klappt: moonID-Login versuchen
-        if html is None:
-            log("Direkter Zugriff mit Cookies fehlgeschlagen – versuche moonID-Login…")
-            html = login_via_moonid(s)
+        # 3) Falls nicht eingeloggt: MoonID-Login
+        if not html or not looks_logged_in(html):
+            if not MG_USERNAME or not MG_PASSWORD:
+                raise RuntimeError("Login fehlgeschlagen. Weder gültige Cookies noch MG_USERNAME/MG_PASSWORD gesetzt.")
+            login_via_moonid(s)
+            html = get_highscore_html(s)
 
-        if html is None:
-            print("Login fehlgeschlagen. Cookie + Credentials halfen nicht.")
-            return
-
-        # 4) Parsen & Filtern
+        # 4) Parsen
         rows = parse_highscore(html)
-        today_players = pick_players(rows, watchlist)
 
-    # 5) Nachricht & State
+    # 5) Watchlist anwenden
+    today_players = pick_players(rows, watch)
+
+    # 6) Report
     msg = build_message(today, prev_players, today_players)
     send_discord(msg)
 
-    new_state = {"date": today.isoformat(), "players": {n: today_players[n] for n in today_players}}
+    # 7) State speichern
+    new_state = {"date": today.isoformat(), "players": {n: today_players.get(n, {}) for n in today_players}}
     save_state(new_state)
     print("Protokoll gesendet und State gespeichert.")
 
