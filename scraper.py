@@ -140,3 +140,134 @@ def parse_table(html):
             elif "loot" in t:
                 mapping["loot"] = idx
             elif t == "w" or t.startswith("w "):
+                mapping["wins"] = idx
+            elif t == "l" or t.startswith("l "):
+                mapping["losses"] = idx
+            elif "anc" in t:
+                mapping["anc"] = idx
+            elif "gold" in t:
+                mapping["gold"] = idx
+        return mapping
+
+    chosen, cols = None, None
+    for tb in candidate_tables:
+        m = header_map(tb)
+        if {"name","level","loot","wins","losses","anc","gold"} <= set(m.keys()):
+            chosen, cols = tb, m
+            break
+    if chosen is None:
+        chosen = max(candidate_tables, key=lambda t: len(t.select("tr")))
+        cols = header_map(chosen)
+
+    data = []
+    for tr in chosen.select("tr"):
+        tds = tr.select("td")
+        if not tds or len(tds) < max(cols.values()) + 1:
+            continue
+        def get(col):
+            return tds[cols[col]].get_text(strip=True) if col in cols else ""
+        row = {
+            "name": get("name"),
+            "level": clean_int(get("level")),
+            "loot": clean_int(get("loot")),
+            "wins": clean_int(get("wins")),
+            "losses": clean_int(get("losses")),
+            "anc": clean_int(get("anc")),
+            "gold": clean_int(get("gold")),
+        }
+        if row["name"]:
+            data.append(row)
+    return data
+
+def pick_players(rows, watchlist):
+    names_norm = {n.strip(): n.strip() for n in watchlist}
+    out = {}
+    for r in rows:
+        if r["name"] in names_norm:
+            out[r["name"]] = r
+    return out
+
+def build_message(today, prev_players, today_players):
+    report = []
+    ranked = []
+    for name, now in today_players.items():
+        prev = prev_players.get(name, {})
+        d_gold = now["gold"] - prev.get("gold", 0)
+        d_wins = now["wins"] - prev.get("wins", 0)
+        d_losses = now["losses"] - prev.get("losses", 0)
+        d_anc = now["anc"] - prev.get("anc", 0)
+        d_lvl = now["level"] - prev.get("level", 0)
+
+        line = f"{name} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
+        extras = []
+        if d_lvl > 0:
+            extras.append(f"Level up +{d_lvl}")
+        if d_anc > 0:
+            extras.append(f"Ancestor fights +{d_anc}")
+        if extras:
+            line += " " + " ".join(extras)
+        report.append((name, d_gold, line))
+        ranked.append((name, d_gold))
+
+    top_name, top_gold = None, None
+    if ranked:
+        top_name, top_gold = max(ranked, key=lambda x: x[1])
+
+    intro = random.choice(MOTIVATION)
+    date_str = today.strftime("%Y-%m-%d")
+    lines = [f"{intro}", f"Datum {date_str}"]
+    if top_name is not None:
+        lines.append(f"Champion des Tages ist {top_name} mit {top_gold} Gold.")
+    for _, _, line in sorted(report, key=lambda x: x[0].lower()):
+        lines.append(line)
+    return "\n".join(lines)
+
+def send_discord(msg):
+    if not DISCORD_WEBHOOK:
+        print("Kein DISCORD_WEBHOOK gesetzt. Nachricht wird nur ausgegeben.")
+        print(msg)
+        return
+    payload = {"content": msg}
+    r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=30)
+    r.raise_for_status()
+
+def main():
+    if not MG_USERNAME or not MG_PASSWORD:
+        raise RuntimeError("MG_USERNAME und MG_PASSWORD fehlen")
+
+    watchlist = read_players()
+
+    with requests.Session() as s:
+        s.headers.update(SESSION_HEADERS)
+
+        if MG_COOKIE:
+            # Direkter PHPSESSID Cookie für int3 Domain als Fallback
+            s.cookies.set("PHPSESSID", MG_COOKIE, domain="int3.monstersgame.moonid.net")
+        else:
+            login_via_moonid(s)
+
+        html = fetch_highscore(s)
+        rows = parse_table(html)
+        today_players = pick_players(rows, watchlist)
+
+    state = load_state()
+    prev_players = state.get("players", {})
+    today = datetime.now(timezone.utc)
+
+    msg = build_message(today, prev_players, today_players)
+    send_discord(msg)
+
+    new_players = {name: today_players[name] for name in today_players}
+    new_state = {
+        "date": today.isoformat(),
+        "players": new_players
+    }
+    save_state(new_state)
+    print("Protokoll gesendet und State gespeichert.")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"Fehler {e}")
+        sys.exit(1)
