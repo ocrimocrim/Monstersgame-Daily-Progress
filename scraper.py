@@ -1,95 +1,50 @@
 import os
-import re
 import requests
-from bs4 import BeautifulSoup
 
-# Secrets aus GitHub Actions
-HIGHSCORE_URL = os.environ.get("MG_HIGHSCORE_URL")
-WATCHLIST = os.environ.get("MG_WATCHLIST", "")
-SESSIONID = os.environ.get("MG_SESSIONID")
-USERNAME = os.environ.get("MG_USERNAME")
-PASSWORD = os.environ.get("MG_PASSWORD")
+MG_SESSIONID = os.getenv("MG_SESSIONID", "").strip()
+MG_USERNAME = os.getenv("MG_USERNAME", "").strip()
+MG_PASSWORD = os.getenv("MG_PASSWORD", "").strip()
+MG_HIGHSCORE_URL = os.getenv("MG_HIGHSCORE_URL", "").strip()
+MG_CSRFTOKEN = os.getenv("MG_CSRFTOKEN", "").strip()
+MG_CONNECT_ID = os.getenv("MG_CONNECT_ID", "").strip()
 
 session = requests.Session()
 
-def logged_in(html_text):
-    """Checkt ob Highscore-Tabelle sichtbar ist"""
-    return "Your Rank" in html_text or "Your rank" in html_text
-
 def login_with_sessionid():
-    if not SESSIONID:
-        return False
-    session.cookies.set("sessionid", SESSIONID, domain="moonid.net")
-    r = session.get(HIGHSCORE_URL)
-    if logged_in(r.text):
-        return r.text
-    return None
+    if not MG_SESSIONID:
+        raise ValueError("Kein MG_SESSIONID gesetzt")
 
-def login_with_credentials():
-    if not USERNAME or not PASSWORD:
-        return None
-    login_url = "https://moonid.net/login/"
+    # Session-Cookie sauber setzen
+    session.cookies.set("sessionid", MG_SESSIONID, domain="moonid.net")
+    r = session.get(MG_HIGHSCORE_URL)
+    if "Login" in r.text or "Passwort" in r.text:
+        print("Session ungültig → versuche Login mit Username/Passwort...")
+        return login_with_username_password()
+    return r.text
+
+def login_with_username_password():
+    if not MG_USERNAME or not MG_PASSWORD:
+        raise ValueError("Weder gültige Session noch Username/Passwort angegeben")
+
     payload = {
-        "username": USERNAME,
-        "password": PASSWORD,
+        "username": MG_USERNAME,
+        "password": MG_PASSWORD,
     }
-    r = session.post(login_url, data=payload)
-    if r.status_code == 200:
-        # Danach Highscore aufrufen
-        r2 = session.get(HIGHSCORE_URL)
-        if logged_in(r2.text):
-            return r2.text
-    return None
-
-def scrape_highscore(html):
-    soup = BeautifulSoup(html, "html.parser")
-    table = soup.find("table")
-    if not table:
-        return []
-    rows = []
-    for tr in table.find_all("tr"):
-        cols = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
-        if cols:
-            rows.append(cols)
-    return rows
-
-def normalize_name(name):
-    return re.sub(r"\s+", " ", name.strip().lower())
-
-def find_watchlist_players(rows):
-    wanted = [normalize_name(n) for n in WATCHLIST.split(",") if n.strip()]
-    hits = []
-    for row in rows:
-        for col in row:
-            if normalize_name(col) in wanted:
-                hits.append(row)
-                break
-    return hits
+    r = session.post("https://int3.monstersgame.moonid.net/index.php?ac=login", data=payload)
+    if "Login" in r.text or "Passwort" in r.text:
+        raise ValueError("Login fehlgeschlagen. Prüfe Username/Passwort.")
+    return session.get(MG_HIGHSCORE_URL).text
 
 def main():
-    html = None
-    # 1. Versuch mit SessionID
-    if SESSIONID:
+    try:
         html = login_with_sessionid()
-    # 2. Fallback mit Username/Password
-    if html is None:
-        html = login_with_credentials()
-    if html is None:
-        print("Login fehlgeschlagen. Weder Cookie noch Credentials funktionieren.")
-        return
+    except Exception as e:
+        print(f"Fehler mit SessionID: {e}")
+        print("Versuche Login mit Username/Passwort...")
+        html = login_with_username_password()
 
-    rows = scrape_highscore(html)
-    if not rows:
-        print("Keine Highscore-Daten gefunden.")
-        return
-
-    hits = find_watchlist_players(rows)
-    if hits:
-        print("Gefundene Spieler:")
-        for h in hits:
-            print(h)
-    else:
-        print("Keine Treffer in der Watchlist. Prüfe Spielernamen oder Parser.")
+    # hier kannst du weitermachen mit HTML verarbeiten
+    print("Highscore-Seite erfolgreich geladen.")
 
 if __name__ == "__main__":
     main()
