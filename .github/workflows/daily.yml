@@ -2,7 +2,7 @@ name: daily-highscore
 
 on:
   schedule:
-    - cron: "59 22 * * *"
+    - cron: "59 22 * * *"   # 23:59 CET. Während CEST ist es 00:59 lokale Zeit.
   workflow_dispatch:
 
 jobs:
@@ -27,6 +27,8 @@ jobs:
           MG_USERNAME: ${{ secrets.MG_USERNAME }}
           MG_PASSWORD: ${{ secrets.MG_PASSWORD }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MG_CONNECT_ID: ${{ secrets.MG_CONNECT_ID }}
+          MG_COOKIE: ${{ secrets.MG_COOKIE }}
         run: |
           python scraper.py
 
