@@ -1,181 +1,159 @@
 import os
 import re
 import unicodedata
-import sys
-from typing import List, Dict
+from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
-# -------------------------
-# Konfiguration (per ENV)
-# -------------------------
-# Pflicht: URL der Highscore-Seite (dein Beispiel von int3)
-HIGHSCORE_URL = os.getenv(
-    "MG_HIGHSCORE_URL",
-    "https://int3.monstersgame.moonid.net/index.php?ac=highscore&vid=0",
-)
-
-# Optional: Watchlist als Komma-getrennte Liste, z.B. "[RSK] Royo, The puzzle, ((( -l-_MERCENARIOSKY_-l- )))"
-WATCHLIST_RAW = os.getenv("MG_WATCHLIST", "")
-
-# Optional: Cookies, falls Login nötig ist (in DevTools gesehen)
-COOKIE_SESSIONID = os.getenv("MG_SESSIONID", "").strip()
-COOKIE_CSRFTOKEN = os.getenv("MG_CSRFTOKEN", "").strip()
-
-# Optional: Discord Webhook (wenn gesetzt, wird dorthin gepostet)
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
-
-
-# -------------------------
-# Hilfsfunktionen
-# -------------------------
-def norm_name(s: str) -> str:
-    """Unicode normalisieren, Mehrfach-Leerzeichen einklappen, trimmen, Kleinschreibung."""
+def norm(s: str) -> str:
+    if s is None:
+        return ""
     s = unicodedata.normalize("NFKC", s)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip().lower()
+    s = s.replace("\u00a0", " ")  # no-break space
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
 
-
-def to_int(num: str) -> int:
-    """Zahlen mit Tausendertrennzeichen in int wandeln."""
-    if not num:
+def parse_int(s: str) -> int:
+    if s is None:
         return 0
-    num = num.replace(".", "").replace(",", "").strip()
-    return int(num) if re.fullmatch(r"\d+", num) else 0
+    # nur Ziffern behalten (tausenderpunkte/kommas, wörter wie "Gold" entfernen)
+    digits = re.sub(r"[^\d]", "", s)
+    return int(digits) if digits.isdigit() else 0
 
+def load_watchlist() -> list[str]:
+    # 1) players.txt (eine Zeile pro Name)
+    if os.path.exists("players.txt"):
+        with open("players.txt", "r", encoding="utf-8") as f:
+            rows = [r.strip() for r in f.readlines()]
+        names = [r for r in rows if r]
+        if names:
+            return names
 
-def fetch_html(url: str) -> str:
-    """HTML holen, mit optionalen Cookies."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; MG-Scraper/1.0)",
-        "Accept": "text/html,application/xhtml+xml",
-    }
+    # 2) Fallback: ENV MG_WATCHLIST (Komma-getrennt)
+    wl = os.environ.get("MG_WATCHLIST", "").strip()
+    if wl:
+        return [x.strip() for x in wl.split(",") if x.strip()]
+
+    return []
+
+def fetch_html(url: str, sessionid: str | None, csrftoken: str | None) -> str:
+    sess = requests.Session()
+    # ein paar harmlose headers
+    sess.headers.update({
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "de,en;q=0.9",
+    })
     cookies = {}
-    if COOKIE_SESSIONID:
-        cookies["sessionid"] = COOKIE_SESSIONID
-    if COOKIE_CSRFTOKEN:
-        cookies["csrftoken"] = COOKIE_CSRFTOKEN
+    if sessionid:
+        cookies["sessionid"] = sessionid
+    if csrftoken:
+        cookies["csrftoken"] = csrftoken
 
-    resp = requests.get(url, headers=headers, cookies=cookies, timeout=30)
+    resp = sess.get(url, cookies=cookies, timeout=30)
     resp.raise_for_status()
     return resp.text
 
-
-def parse_highscore_table(html: str) -> List[Dict]:
-    """Spielerzeilen aus dem HTML extrahieren (genau wie in deinem Dump)."""
+def parse_table(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
-    rows = []
-
-    for tr in soup.find_all("tr"):
-        a = tr.find("a", href=re.compile(r"showuser"))
+    out = []
+    # Alle Zeilen mit einem Spielerlink (showuser)
+    for tr in soup.select("tr"):
+        a = tr.select_one('a[href*="showuser"]')
         if not a:
-            continue  # keine Spielerzeile
-
-        tds = tr.find_all("td", class_="tdn_highscore")
-        if len(tds) < 10:
-            # Manche Tabellenzeilen (Überschriften etc.) haben weniger Spalten
             continue
 
-        # Spalten laut deinem HTML:
-        # 0 rank, 1 race (img alt), 2 name (a), 3 lvl, 4 loot, 5 bites, 6 W, 7 L, 8 Anc. +, 9 Gold + (Text vor <img>)
-        rank_txt = tds[0].get_text(strip=True).rstrip(".")
+        tds = tr.find_all("td")
+        if len(tds) < 10:
+            # falls die Struktur mal abweicht, nächste Zeile
+            continue
+
+        # Spalten laut deinem Dump:
+        # 0: Rank
+        # 1: Race (IMG alt = "Vampire"/"Werewolf")
+        # 2: Name (A-Text)
+        # 3: Lvl
+        # 4: Loot
+        # 5: Bites
+        # 6: W
+        # 7: L
+        # 8: Anc. +
+        # 9: Gold +
         race_img = tds[1].find("img")
-        race = race_img.get("alt").strip() if race_img and race_img.has_attr("alt") else ""
-        name_raw = a.get_text()
-        lvl = tds[3].get_text(strip=True)
-        loot = tds[4].get_text(strip=True)
-        bites = tds[5].get_text(strip=True)
-        wins = tds[6].get_text(strip=True)
-        losses = tds[7].get_text(strip=True)
-        anc = tds[8].get_text(strip=True)
+        race = race_img["alt"].strip() if race_img and race_img.has_attr("alt") else ""
 
-        # In der Gold-Spalte hängt ein Münz-Icon -> nur Zahl vor dem Bild nehmen
-        gold_text = tds[9].get_text(" ", strip=True)
-        gold_text = gold_text.split()[0] if gold_text else "0"
-
-        row = {
-            "rank": to_int(rank_txt),
+        name = a.get_text(strip=True)
+        item = {
+            "rank": parse_int(tds[0].get_text()),
             "race": race,
-            "name": unicodedata.normalize("NFKC", name_raw).strip(),
-            "level": to_int(lvl),
-            "loot": to_int(loot),
-            "bites": to_int(bites),
-            "wins": to_int(wins),
-            "losses": to_int(losses),
-            "anc_plus": to_int(anc),
-            "gold_plus": to_int(gold_text),
+            "name": name,
+            "lvl": parse_int(tds[3].get_text()),
+            "loot": parse_int(tds[4].get_text()),
+            "bites": parse_int(tds[5].get_text()),
+            "wins": parse_int(tds[6].get_text()),
+            "losses": parse_int(tds[7].get_text()),
+            "anc_plus": parse_int(tds[8].get_text()),
+            "gold_plus": parse_int(tds[9].get_text()),
         }
-        rows.append(row)
+        out.append(item)
+    return out
 
-    return rows
-
-
-def find_watchlist_hits(rows: List[Dict], watchlist: List[str]) -> List[Dict]:
-    wl = {norm_name(n) for n in watchlist if n.strip()}
-    if not wl:
-        return []
-    hits = [r for r in rows if norm_name(r["name"]) in wl]
+def find_matches(rows: list[dict], watchlist: list[str]) -> list[dict]:
+    want = {norm(n): n for n in watchlist}  # map normalized -> original
+    hits = []
+    for r in rows:
+        if norm(r["name"]) in want:
+            hits.append(r)
+    # nach Rang sortieren, wenn vorhanden, sonst Name
+    hits.sort(key=lambda x: (x["rank"] if x["rank"] else 10**9, norm(x["name"])))
     return hits
 
+def fmt_row(r: dict) -> str:
+    return (f"#{r['rank']:>2} {r['race']:<8} {r['name']} | "
+            f"Lvl {r['lvl']} | Loot {r['loot']:,} | Bites {r['bites']:,} | "
+            f"W {r['wins']:,} / L {r['losses']:,} | Anc+ {r['anc_plus']:,} | Gold+ {r['gold_plus']:,}"
+            ).replace(",", ".")
 
-def fmt_gold(n: int) -> str:
-    return f"{n:,}".replace(",", ".")
-
-
-def build_message(hits: List[Dict]) -> str:
-    if not hits:
-        return (
-            "Wolves, hört zu. Hier kommt die Beute.\n"
-            f"Datum {os.getenv('MG_DATE_OVERRIDE', '') or __import__('datetime').date.today()}\n"
-            "Keine Treffer in der Watchlist. Prüfe Spielernamen oder Parser."
-        )
-
-    lines = [
-        "Rudel aufwachen. Frische Trophäen liegen auf dem Tisch.",
-        f"Datum {os.getenv('MG_DATE_OVERRIDE', '') or __import__('datetime').date.today()}",
-        "",
-    ]
-    for r in sorted(hits, key=lambda x: x["rank"] or 10**9):
-        lines.append(
-            f"#{r['rank']:>2} {r['race']:<8} {r['name']} | Lvl {r['level']} | "
-            f"Loot {fmt_gold(r['loot'])} | Bites {fmt_gold(r['bites'])} | "
-            f"W {fmt_gold(r['wins'])} / L {fmt_gold(r['losses'])} | "
-            f"Anc+ {fmt_gold(r['anc_plus'])} | Gold+ {fmt_gold(r['gold_plus'])}"
-        )
-    return "\n".join(lines)
-
-
-def post_to_discord(message: str) -> None:
-    if not DISCORD_WEBHOOK_URL:
-        return
+def post_discord(webhook: str, content: str):
     try:
-        resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=30)
+        resp = requests.post(webhook, json={"content": content}, timeout=15)
         resp.raise_for_status()
     except Exception as e:
-        print(f"[Warn] Discord-Post fehlgeschlagen: {e}", file=sys.stderr)
-
+        print(f"[WARN] Discord-Webhook fehlgeschlagen: {e}")
 
 def main():
-    try:
-        html = fetch_html(HIGHSCORE_URL)
-    except Exception as e:
-        print(f"[Fehler] Konnte Highscore nicht laden: {e}")
-        sys.exit(1)
+    url = os.environ.get("MG_HIGHSCORE_URL", "").strip()
+    if not url:
+        raise SystemExit("MG_HIGHSCORE_URL fehlt.")
 
-    rows = parse_highscore_table(html)
+    watchlist = load_watchlist()
+    if not watchlist:
+        print("Hinweis: Watchlist leer. Lege 'players.txt' an (eine Zeile pro Name) "
+              "oder setze MG_WATCHLIST.")
+        watchlist = []
 
-    # Watchlist aufbauen
-    watchlist = [w.strip() for w in WATCHLIST_RAW.split(",")] if WATCHLIST_RAW else []
+    sessionid = os.environ.get("MG_SESSIONID", "").strip() or None
+    csrftoken = os.environ.get("MG_CSRFTOKEN", "").strip() or None
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip() or None
 
-    hits = find_watchlist_hits(rows, watchlist)
+    html = fetch_html(url, sessionid, csrftoken)
+    rows = parse_table(html)
+    hits = find_matches(rows, watchlist)
 
-    # NIE max() auf leeren Listen -> vorher prüfen
-    msg = build_message(hits)
+    # Kopfzeile
+    now = datetime.now(timezone.utc).astimezone()
+    header = f"Wolves, hört zu. Hier kommt die Beute.\nDatum {now:%Y-%m-%d}"
 
-    # Ausgabe + optional Discord
+    if not hits:
+        body = "Keine Treffer in der Watchlist. Prüfe Spielernamen oder Parser."
+    else:
+        body = "\n".join(fmt_row(r) for r in hits)
+
+    msg = f"{header}\n{body}"
     print(msg)
-    post_to_discord(msg)
-
+    if webhook:
+        post_discord(webhook, msg)
 
 if __name__ == "__main__":
     main()
