@@ -39,13 +39,24 @@ MOTIVATION = [
 
 # ---------- Utils ----------
 
+ZWS = "\u200b\u200c\u200d\u2060"
+
 def norm_name(s: str) -> str:
     if s is None:
         return ""
-    # entferne NBSP, mehrfach-Spaces, trimmen
-    t = s.replace("\xa0", " ").strip()
-    t = re.sub(r"\s+", " ", t)
-    return t
+    t = str(s)
+    t = t.replace("\xa0", " ")
+    for ch in ZWS:
+        t = t.replace(ch, "")
+    # runde und eckige Klammern vereinheitlichen
+    t = t.replace("（", "(").replace("）", ")").replace("［", "[").replace("］", "]")
+    # mehrere Spaces zusammenziehen
+    t = re.sub(r"\s+", " ", t).strip()
+    return t.lower()
+
+def strip_clantag(s: str) -> str:
+    # führendes [CLAN] plus folgendes Leerzeichen entfernen
+    return re.sub(r"^\[[^\]]+\]\s*", "", s).strip()
 
 def read_players():
     default_players = [
@@ -61,8 +72,13 @@ def read_players():
     ]
     if os.path.exists(PLAYERS_FILE):
         with open(PLAYERS_FILE, "r", encoding="utf-8") as f:
-            return [norm_name(line) for line in f if line.strip()]
-    return [norm_name(x) for x in default_players]
+            raw = [line.strip() for line in f if line.strip()]
+    else:
+        raw = default_players
+    # zwei Varianten speichern
+    wl_norm = [norm_name(x) for x in raw]
+    wl_core = [strip_clantag(norm_name(x)) for x in raw]
+    return raw, wl_norm, wl_core
 
 def load_state():
     if os.path.exists(STATE_PATH):
@@ -223,11 +239,11 @@ def parse_table_pandas(html):
             continue
         data = []
         for _, row in df.iterrows():
-            name = norm_name(str(row.iloc[idx["name"]]))
-            if not name or name.lower() == "name":
+            nm = norm_name(row.iloc[idx["name"]])
+            if not nm or nm == "name":
                 continue
             data.append({
-                "name": name,
+                "name": nm,
                 "level": clean_int(row.iloc[idx["level"]]),
                 "loot": clean_int(row.iloc[idx["loot"]]),
                 "wins": clean_int(row.iloc[idx["wins"]]),
@@ -245,30 +261,28 @@ ROW_RX = re.compile(
     r"""
     ^\s*(\d+)\.\s+                              # Rang
     (Vampire|Werewolf)\s+                       # Rasse
-    (.+?)\s+                                    # Name (greedy, bis Level)
-    (\d+)\s+                                    # Lvl
+    (.+?)\s+                                    # Name
+    (\d+)\s+                                    # Level
     ([\d\.,]+)\s+                               # Loot
     ([\d\.,]+)\s+                               # Bites
     ([\d\.,]+)\s+                               # W
     ([\d\.,]+)\s+                               # L
-    ([\d\.,]+)\s+                               # Anc. +
-    ([\d\.,]+)\s+Gold                           # Gold + ... Gold
+    ([\d\.,]+)\s+                               # Anc
+    ([\d\.,]+)\s+Gold                           # Gold
     """,
     re.VERBOSE | re.MULTILINE
 )
 
 def parse_table_text(html):
-    # Gesamten sichtbaren Text extrahieren
     soup = BeautifulSoup(html, "lxml")
     text = soup.get_text("\n", strip=True)
     rows = []
     for m in ROW_RX.finditer(text):
-        name = norm_name(m.group(3))
+        nm = norm_name(m.group(3))
         rows.append({
-            "name": name,
+            "name": nm,
             "level": clean_int(m.group(4)),
             "loot": clean_int(m.group(5)),
-            # m.group(6) = bites, ignorieren
             "wins": clean_int(m.group(7)),
             "losses": clean_int(m.group(8)),
             "anc": clean_int(m.group(9)),
@@ -287,21 +301,29 @@ def parse_table(html):
         return rows
     return parse_table_text(html)
 
-def pick_players(rows, watchlist):
-    watch = {norm_name(n): True for n in watchlist}
-    return {r["name"]: r for r in rows if norm_name(r["name"]) in watch}
+def pick_players(rows, wl_norm, wl_core):
+    wl_set = set(wl_norm)
+    wl_core_set = set(wl_core)
+    hits = {}
+    for r in rows:
+        nm = norm_name(r["name"])
+        nm_core = strip_clantag(nm)
+        if nm in wl_set or nm_core in wl_core_set:
+            hits[nm] = r
+    return hits
 
 def build_message(today, prev_players, today_players):
     report, ranked = [], []
-    for name, now in today_players.items():
-        prev = prev_players.get(name, {})
+    for name_norm, now in today_players.items():
+        prev = prev_players.get(name_norm, {})
         d_gold   = now["gold"]   - prev.get("gold", 0)
         d_wins   = now["wins"]   - prev.get("wins", 0)
         d_losses = now["losses"] - prev.get("losses", 0)
         d_anc    = now["anc"]    - prev.get("anc", 0)
         d_lvl    = now["level"]  - prev.get("level", 0)
 
-        line = f"{name} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
+        display = now["name"] if now.get("name") else name_norm
+        line = f"{display} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
         extras = []
         if d_lvl > 0:
             extras.append(f"Level up +{d_lvl}")
@@ -309,8 +331,8 @@ def build_message(today, prev_players, today_players):
             extras.append(f"Ancestor fights +{d_anc}")
         if extras:
             line += " " + " ".join(extras)
-        report.append((name, d_gold, line))
-        ranked.append((name, d_gold))
+        report.append((display, d_gold, line))
+        ranked.append((display, d_gold))
 
     intro = random.choice(MOTIVATION)
     date_str = today.strftime("%Y-%m-%d")
@@ -338,7 +360,7 @@ def main():
     if not MG_USERNAME or not MG_PASSWORD:
         raise RuntimeError("MG_USERNAME und MG_PASSWORD fehlen")
 
-    watchlist = read_players()
+    raw_watch, wl_norm, wl_core = read_players()
 
     with requests.Session() as s:
         s.headers.update(SESSION_HEADERS)
@@ -349,13 +371,18 @@ def main():
         html = fetch_highscore(s)
 
     rows = parse_table(html)
-    today_players = pick_players(rows, watchlist)
 
-    # Debug-Dump, falls nötig
+    # Debug sichern
     pathlib.Path("data").mkdir(parents=True, exist_ok=True)
     with open(DEBUG_HTML, "w", encoding="utf-8") as f:
         f.write(html[:600000])
-    print(f"Debug gespeichert in {DEBUG_HTML}. Gesamtzeilen {len(rows)}. Treffer Watchlist {len(today_players)}.")
+
+    # kurze Logliste der ersten Namen
+    first_names = [r["name"] for r in rows[:8]]
+    print("Gefundene Zeilen", len(rows))
+    print("Beispielnamen", first_names)
+
+    today_players = pick_players(rows, wl_norm, wl_core)
 
     state = load_state()
     prev_players = state.get("players", {})
@@ -364,7 +391,8 @@ def main():
     msg = build_message(today, prev_players, today_players)
     send_discord(msg)
 
-    new_state = {"date": today.isoformat(), "players": {n: today_players[n] for n in today_players}}
+    # State mit normalisierten Namen speichern
+    new_state = {"date": today.isoformat(), "players": {norm_name(v["name"]): v for v in today_players.values()}}
     save_state(new_state)
     print("Protokoll gesendet und State gespeichert.")
 
