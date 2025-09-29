@@ -1,218 +1,204 @@
-#!/usr/bin/env python3
 import os
 import re
 import sys
-import time
-from pathlib import Path
-from html import unescape
+from typing import List, Tuple
 
 import requests
 from bs4 import BeautifulSoup
 
-# -------------------------
-# Konfiguration über ENV
-# -------------------------
-HIGHSCORE_URL = os.getenv("MG_HIGHSCORE_URL", "https://int3.monstersgame.moonid.net/index.php?ac=highscore&vid=0")
-SESSIONID     = (os.getenv("MG_SESSIONID") or "").strip()
-USERNAME      = (os.getenv("MG_USERNAME") or "").strip()
-PASSWORD      = (os.getenv("MG_PASSWORD") or "").strip()
-CONNECT_ID    = (os.getenv("MG_CONNECT_ID") or "").strip()     # optional
-CSRF_TOKEN    = (os.getenv("MG_CSRFTOKEN") or "").strip()      # optional
-DISCORD_WEBHOOK = (os.getenv("DISCORD_WEBHOOK") or "").strip()
+# ---------------------------------------------------
+# ENV / Secrets
+# ---------------------------------------------------
+HIGHSCORE_URL = os.getenv("MG_HIGHSCORE_URL", "").strip()
+SESSIONID      = os.getenv("MG_SESSIONID", "").strip()
+CSRF_TOKEN     = os.getenv("MG_CSRFTOKEN", "").strip()   # optional
+USERNAME       = os.getenv("MG_USERNAME", "").strip()    # Fallback-Login
+PASSWORD       = os.getenv("MG_PASSWORD", "").strip()    # Fallback-Login
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
-PLAYERS_FILE = Path("players.txt")
+WATCHLIST_FILE = "players.txt"   # eine Zeile pro Name
 
-# -------------------------
+
+# ---------------------------------------------------
 # Helpers
-# -------------------------
-def log(msg: str):
-    print(msg, flush=True)
-
-def is_logged_in_html(html: str) -> bool:
-    # heuristisch: es muss eine Highscore-Tabelle geben
-    return 'Your Rank' in html or 'tdh_highscore' in html or 'ac=highscore' in html
-
-def normalize_name(name: str) -> str:
-    s = unescape(name)
-    s = re.sub(r"\s+", " ", s, flags=re.S).strip().lower()
+# ---------------------------------------------------
+def norm_name(s: str) -> str:
+    """Sanfte Normalisierung: Kleinschreibung, Whitespace komprimieren,
+    unkritische Satzzeichen am Rand weg."""
+    s = (s or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    s = s.strip("[](){}.,;:!?'\"")
     return s
 
-def load_watchlist():
-    names = []
-    if PLAYERS_FILE.exists():
-        for line in PLAYERS_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                names.append(line)
-    env_list = os.getenv("MG_WATCHLIST", "")
-    if env_list.strip():
-        names += [x.strip() for x in env_list.split(",") if x.strip()]
-    # unique, normalisiert
-    seen = set()
+def load_watchlist(path: str) -> List[str]:
+    if not os.path.isfile(path):
+        return []
     out = []
-    for n in names:
-        nn = normalize_name(n)
-        if nn not in seen:
-            seen.add(nn)
-            out.append(n)
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            t = line.strip()
+            if t:
+                out.append(t)
     return out
 
-def set_sso_cookie(session: requests.Session, sessionid: str):
-    # SSO-Cookie muss für .moonid.net gesetzt sein
-    if not sessionid:
-        return
-    session.cookies.set(
-        name="sessionid",
-        value=sessionid,
-        domain=".moonid.net",
-        path="/",
-        secure=True
-    )
-
-def try_fetch_highscore(session: requests.Session) -> requests.Response | None:
-    try:
-        r = session.get(HIGHSCORE_URL, timeout=30, allow_redirects=True)
-        if r.status_code == 200 and is_logged_in_html(r.text):
-            return r
-        return None
-    except requests.RequestException:
-        return None
-
-def login_with_credentials(session: requests.Session) -> bool:
-    """Robuster Login:
-       1) Initial GET auf Login-Seite (setzt Cookies/Tokens)
-       2) POST mit Username/Passwort (+ optionalen Feldern)
-    """
-    login_url = "https://int3.monstersgame.moonid.net/index.php?ac=login"
-
-    try:
-        # initial GET (holt csrftoken/Session-Cookies etc.)
-        g = session.get(login_url, timeout=30)
-    except requests.RequestException:
-        return False
-
-    payload = {
-        # viele MG-Instanzen akzeptieren diese Feldnamen
-        "username": USERNAME,
-        "password": PASSWORD,
-    }
-    if CONNECT_ID:
-        payload["connect_id"] = CONNECT_ID
-
-    # Falls per ENV schon explizit ein csrftoken gegeben ist, mitsenden
-    if CSRF_TOKEN:
-        payload["csrftoken"] = CSRF_TOKEN
-
-    # Manche Instanzen benutzen andere Felder – versuche zusätzlich gängige Aliase
-    alt_payload = {
-        "login": USERNAME,
-        "pass": PASSWORD,
-        "name": USERNAME,
-        "pwd": PASSWORD,
-    }
-
-    # Wir probieren 2 Posts: erst Standard-Payload, dann Fallback mit Aliases
-    for data in (payload, {**payload, **alt_payload}):
-        try:
-            p = session.post(login_url, data=data, timeout=30, allow_redirects=True)
-        except requests.RequestException:
-            continue
-        # Wenn wir danach die Highscore sehen, gilt "eingeloggt"
-        if p.status_code == 200:
-            # manchmal landet man auf der Startseite – dann direkt Highscore testen
-            r = try_fetch_highscore(session)
-            if r is not None:
-                return True
-    return False
-
-def parse_highscore(html: str):
-    """Gibt eine Liste von (rang, name) zurück (normalisiert)."""
-    soup = BeautifulSoup(html, "html.parser")
-    rows = []
-    for tr in soup.select("table tr"):
-        tds = tr.find_all("td")
-        if len(tds) >= 3:
-            # Spalte 1: Rang (Zahl oder #)
-            rank_text = tds[0].get_text(strip=True)
-            # Spalte 3: Name (Link)
-            name_td = tds[2]
-            name = name_td.get_text(" ", strip=True)
-            if name and re.match(r"^\d+\.?$", rank_text):
-                rows.append((rank_text, name))
-    return rows
-
-def post_discord(message: str):
-    if not DISCORD_WEBHOOK:
-        log(message)
+def send_discord(text: str):
+    if not DISCORD_WEBHOOK_URL:
         return
     try:
-        requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=15)
-    except requests.RequestException:
-        log(message)
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": text}, timeout=20)
+    except Exception:
+        pass
 
-# -------------------------
-# Main
-# -------------------------
-def main():
-    if not PLAYERS_FILE.exists() and not os.getenv("MG_WATCHLIST", "").strip():
-        log("Hinweis: Keine Watchlist gefunden (players.txt leer & MG_WATCHLIST nicht gesetzt).")
-    watch_raw = load_watchlist()
-    watch = {normalize_name(n): n for n in watch_raw}
 
+# ---------------------------------------------------
+# Login / Fetch
+# ---------------------------------------------------
+def prepare_session() -> requests.Session:
     s = requests.Session()
     s.headers.update({
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     })
-
-    # 1) Cookie-Weg
-    used_cookie = False
+    # sessionid-Cookie (Domain: .moonid.net reicht für int3.*)
     if SESSIONID:
-        set_sso_cookie(s, SESSIONID)
-        r = try_fetch_highscore(s)
-        if r is not None:
-            used_cookie = True
-        else:
-            log("Session-Cookie funktioniert nicht (evtl. abgelaufen). Fallback: Login…")
+        s.cookies.set("sessionid", SESSIONID, domain=".moonid.net", path="/")
+    if CSRF_TOKEN:
+        s.cookies.set("csrftoken", CSRF_TOKEN, domain=".moonid.net", path="/")
+    return s
 
-    # 2) Login-Fallback
-    if not used_cookie:
-        if USERNAME and PASSWORD:
-            ok = login_with_credentials(s)
-            if not ok:
-                log("Login fehlgeschlagen. Weder Cookie noch Credentials funktionieren.")
-                sys.exit(0)
+def fetch(url: str, s: requests.Session) -> requests.Response:
+    r = s.get(url, timeout=40, allow_redirects=True)
+    return r
+
+def looks_logged_out(html: str) -> bool:
+    hay = html.lower()
+    if "ac=login" in hay or "name:" in hay and "password" in hay:
+        return True
+    # Wenn keine showuser-Links auftauchen, ist es oft Login/Fehlerseite
+    if "showuser" not in hay:
+        return True
+    return False
+
+def try_password_login(s: requests.Session) -> bool:
+    """Sehr generisches Login – falls der Cookie tot ist.
+    Die tatsächlichen Felder variieren je nach Spielversion.
+    Wir probieren Standard-Parameter und hoffen auf 200 + showuser in der Antwort."""
+    if not (USERNAME and PASSWORD and HIGHSCORE_URL):
+        return False
+    base = HIGHSCORE_URL.split("/index.php")[0]
+    login_url = base + "/index.php?ac=login"
+    data = {
+        "username": USERNAME,
+        "password": PASSWORD,
+        "login": "Login"
+    }
+    try:
+        s.post(login_url, data=data, timeout=40, allow_redirects=True)
+        test = s.get(HIGHSCORE_URL, timeout=40, allow_redirects=True)
+        return not looks_logged_out(test.text)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------
+# Parser für die Highscore-Tabelle
+# ---------------------------------------------------
+def parse_highscore_names(html: str) -> List[str]:
+    """Nimmt die größte Tabelle und extrahiert die Namen aus <a href*='showuser'>."""
+    soup = BeautifulSoup(html, "html.parser")
+    tables = soup.find_all("table")
+    if not tables:
+        return []
+
+    # größte Tabelle = die mit meisten <tr>
+    def tr_count(tbl): return len(tbl.find_all("tr"))
+    table = max(tables, key=tr_count)
+
+    names = []
+    for tr in table.find_all("tr"):
+        a = tr.find("a", href=lambda h: h and "showuser" in h)
+        if not a:
+            continue
+        name = a.get_text(strip=True)
+        if name:
+            names.append(name)
+    # Duplikate raus
+    seen = set()
+    uniq = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            uniq.append(n)
+    return uniq
+
+
+# ---------------------------------------------------
+# Matchen gegen Watchlist
+# ---------------------------------------------------
+def match_watchlist(found: List[str], watch: List[str]) -> Tuple[List[str], List[str]]:
+    found_norm = {norm_name(n): n for n in found}
+    hits = []
+    misses = []
+    for w in watch:
+        wn = norm_name(w)
+        if wn in found_norm:
+            hits.append(found_norm[wn])  # Originalname aus Highscore
         else:
-            log("Kein gültiger Cookie und keine Credentials gesetzt.")
+            misses.append(w)
+    return hits, misses
+
+
+# ---------------------------------------------------
+# Main
+# ---------------------------------------------------
+def main():
+    if not HIGHSCORE_URL:
+        print("Fehler: MG_HIGHSCORE_URL ist nicht gesetzt.")
+        sys.exit(1)
+
+    session = prepare_session()
+
+    # 1) mit Cookie probieren
+    try:
+        resp = fetch(HIGHSCORE_URL, session)
+        html = resp.text
+    except Exception as e:
+        print(f"Netzwerkfehler: {e}")
+        sys.exit(1)
+
+    # 2) Falls ausgeloggt: Passwort-Login probieren
+    if looks_logged_out(html):
+        if try_password_login(session):
+            html = session.get(HIGHSCORE_URL, timeout=40).text
+        else:
+            print("Login fehlgeschlagen. Weder Cookie noch Credentials funktionieren.")
             sys.exit(0)
 
-    # 3) Jetzt Highscore abrufen (wir sollten drin sein)
-    r = try_fetch_highscore(s)
-    if r is None:
-        log("Konnte Highscore trotz Login nicht laden.")
+    # 3) Namen parsen (neuer robuster Parser)
+    names = parse_highscore_names(html)
+    if not names:
+        print("Konnte keine Rangliste parsen (HTML/Tabelle nicht gefunden).")
         sys.exit(0)
 
-    rows = parse_highscore(r.text)
-    if not rows:
-        log("Konnte keine Rangliste parsen (HTML hat sich evtl. geändert).")
+    watch = load_watchlist(WATCHLIST_FILE)
+    if not watch:
+        print("Hinweis: players.txt leer oder fehlt. Gefundene Namen (Top-Auszug):")
+        print(", ".join(names[:20]))
         sys.exit(0)
 
-    # 4) Matchen
-    hits = []
-    for rank, name in rows:
-        if normalize_name(name) in watch:
-            hits.append((rank, name))
+    hits, misses = match_watchlist(names, watch)
 
-    # 5) Ausgabe
+    # Ausgabe / Discord
+    msg_lines = []
     if hits:
-        date_str = time.strftime("%Y-%m-%d")
-        lines = [f"Wolves, hört zu. Hier kommt die Beute.\nDatum {date_str}"]
-        for rank, name in hits:
-            lines.append(f"{rank} {name}")
-        msg = "\n".join(lines)
-    else:
-        msg = f"Wolves, hört zu. Hier kommt die Beute.\nDatum {time.strftime('%Y-%m-%d')}\nKeine Treffer in der Watchlist. Prüfe Spielernamen oder Parser."
+        msg_lines.append("🎯 Gefunden (auf der Rangliste): " + ", ".join(hits))
+    if misses:
+        msg_lines.append("❌ Nicht gefunden: " + ", ".join(misses))
+    out_msg = "\n".join(msg_lines) if msg_lines else "Keine Watchlist-Treffer."
 
-    post_discord(msg)
+    print(out_msg)
+    send_discord(out_msg)
+
 
 if __name__ == "__main__":
     main()
