@@ -9,17 +9,17 @@ HIGHSCORE_URL = BASE_URL + "/index.php?ac=highscore&sac=spieler&highrasse=0&coun
 STATE_PATH = "data/state.json"
 PLAYERS_FILE = "players.txt"
 
-# moonID Login
+# moonID
 MOONID_BASE = "https://moonid.net"
-# Die Connect-ID ist pro Spielserver unterschiedlich. 240 passt zu deinem Beispiel.
-MOONID_CONNECT_ID = os.environ.get("MG_CONNECT_ID", "240")
+MOONID_CONNECT_ID = os.environ.get("MG_CONNECT_ID", "240")  # bei Bedarf im Repo als Secret setzen
 MOONID_LOGIN_URL = f"{MOONID_BASE}/account/login/?next=/api/account/connect/{MOONID_CONNECT_ID}/"
+MOONID_CONNECT_URL = f"{MOONID_BASE}/api/account/connect/{MOONID_CONNECT_ID}/"
 
+# Secrets
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
 MG_USERNAME = os.environ.get("MG_USERNAME", "")
 MG_PASSWORD = os.environ.get("MG_PASSWORD", "")
-# Optionaler direkter Session-Cookie, falls nötig. Name ist typischerweise PHPSESSID auf der Spiel-Domain.
-MG_COOKIE = os.environ.get("MG_COOKIE", "")
+MG_COOKIE = os.environ.get("MG_COOKIE", "")  # optionaler direkter PHPSESSID Cookie auf int3 Domain
 
 SESSION_HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -71,16 +71,14 @@ def clean_int(text):
     return int(t) if t else 0
 
 def login_via_moonid(session: requests.Session):
-    # Login-Seite holen, CSRF einsammeln
+    # Loginseite holen und CSRF plus next übernehmen
     r = session.get(MOONID_LOGIN_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "lxml")
 
     form = None
-    # bevorzugt das Formular mit action /account/login/
     for f in soup.select("form"):
-        action = (f.get("action") or "").lower()
-        if "/account/login/" in action or f.select_one("input[type=password]"):
+        if f.select_one("input[name='username']") and f.select_one("input[name='password']"):
             form = f
             break
     if form is None:
@@ -96,31 +94,25 @@ def login_via_moonid(session: requests.Session):
             continue
         typ = (inp.get("type") or "").lower()
         val = inp.get("value") or ""
-        # CSRF und next übernehmen
         if typ in ("hidden", "submit"):
             payload[name] = val
 
-    # Feldnamen aus dem HTML: username, password
-    user_input = form.select_one("input[name='username']") or form.select_one("input[name*=user]")
-    pass_input = form.select_one("input[name='password']") or form.select_one("input[type=password]")
-    if not user_input or not pass_input:
-        raise RuntimeError("Benutzer oder Passwortfeld nicht erkannt")
+    payload["username"] = MG_USERNAME
+    payload["password"] = MG_PASSWORD
 
-    payload[user_input.get("name")] = MG_USERNAME
-    payload[pass_input.get("name")] = MG_PASSWORD
-
-    # Absenden und Weiterleitungen bis zum Gameserver folgen
+    # Login absenden
     r2 = session.post(login_url, data=payload, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r2.raise_for_status()
 
-    # Nach dem Login leitet moonID auf /api/account/connect/<id>/ und dann auf die Spiel-Domain
-    # Wir prüfen mit einem Abruf der Highscore-Seite, ob Cookies gesetzt wurden
-    r3 = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30, allow_redirects=True)
+    # Explizit den Connect Endpoint aufrufen, damit Cookies auf int3 gesetzt werden
+    r3 = session.get(MOONID_CONNECT_URL, headers=SESSION_HEADERS, timeout=30, allow_redirects=True)
     r3.raise_for_status()
-    html = r3.text
-    # heuristische Prüfung auf eingeloggt
-    if "Logout" not in html and "logout" not in html:
-        raise RuntimeError("Login okay, aber Session auf Spielserver nicht aktiv. Prüfe MG_CONNECT_ID oder Credentials.")
+
+    # Jetzt sollte die Session auf int3 aktiv sein
+    r4 = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30, allow_redirects=True)
+    r4.raise_for_status()
+    if "Logout" not in r4.text and "logout" not in r4.text:
+        raise RuntimeError("Login okay, aber Session auf Spielserver nicht aktiv. Prüfe MG_CONNECT_ID oder setze MG_COOKIE als Fallback.")
 
 def fetch_highscore(session: requests.Session):
     r = session.get(HIGHSCORE_URL, headers={"User-Agent": SESSION_HEADERS["User-Agent"]}, timeout=30)
@@ -148,134 +140,3 @@ def parse_table(html):
             elif "loot" in t:
                 mapping["loot"] = idx
             elif t == "w" or t.startswith("w "):
-                mapping["wins"] = idx
-            elif t == "l" or t.startswith("l "):
-                mapping["losses"] = idx
-            elif "anc" in t:
-                mapping["anc"] = idx
-            elif "gold" in t:
-                mapping["gold"] = idx
-        return mapping
-
-    chosen, cols = None, None
-    for tb in candidate_tables:
-        m = header_map(tb)
-        if {"name","level","loot","wins","losses","anc","gold"} <= set(m.keys()):
-            chosen, cols = tb, m
-            break
-    if chosen is None:
-        chosen = max(candidate_tables, key=lambda t: len(t.select("tr")))
-        cols = header_map(chosen)
-
-    data = []
-    for tr in chosen.select("tr"):
-        tds = tr.select("td")
-        if not tds or len(tds) < max(cols.values()) + 1:
-            continue
-        def get(col):
-            return tds[cols[col]].get_text(strip=True) if col in cols else ""
-        row = {
-            "name": get("name"),
-            "level": clean_int(get("level")),
-            "loot": clean_int(get("loot")),
-            "wins": clean_int(get("wins")),
-            "losses": clean_int(get("losses")),
-            "anc": clean_int(get("anc")),
-            "gold": clean_int(get("gold")),
-        }
-        if row["name"]:
-            data.append(row)
-    return data
-
-def pick_players(rows, watchlist):
-    names_norm = {n.strip(): n.strip() for n in watchlist}
-    out = {}
-    for r in rows:
-        if r["name"] in names_norm:
-            out[r["name"]] = r
-    return out
-
-def build_message(today, prev_players, today_players):
-    report = []
-    ranked = []
-    for name, now in today_players.items():
-        prev = prev_players.get(name, {})
-        d_gold = now["gold"] - prev.get("gold", 0)
-        d_wins = now["wins"] - prev.get("wins", 0)
-        d_losses = now["losses"] - prev.get("losses", 0)
-        d_anc = now["anc"] - prev.get("anc", 0)
-        d_lvl = now["level"] - prev.get("level", 0)
-
-        line = f"{name} looted {d_gold} Gold, won {d_wins} fights, lost {d_losses} fights."
-        extras = []
-        if d_lvl > 0:
-            extras.append(f"Level up +{d_lvl}")
-        if d_anc > 0:
-            extras.append(f"Ancestor fights +{d_anc}")
-        if extras:
-            line += " " + " ".join(extras)
-        report.append((name, d_gold, line))
-        ranked.append((name, d_gold))
-
-    top_name, top_gold = None, None
-    if ranked:
-        top_name, top_gold = max(ranked, key=lambda x: x[1])
-
-    intro = random.choice(MOTIVATION)
-    date_str = today.strftime("%Y-%m-%d")
-    lines = [f"{intro}", f"Datum {date_str}"]
-    if top_name is not None:
-        lines.append(f"Champion des Tages ist {top_name} mit {top_gold} Gold.")
-    for _, _, line in sorted(report, key=lambda x: x[0].lower()):
-        lines.append(line)
-    return "\n".join(lines)
-
-def send_discord(msg):
-    if not DISCORD_WEBHOOK:
-        print("Kein DISCORD_WEBHOOK gesetzt. Nachricht wird nur ausgegeben.")
-        print(msg)
-        return
-    payload = {"content": msg}
-    r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=30)
-    r.raise_for_status()
-
-def main():
-    if not MG_USERNAME or not MG_PASSWORD:
-        raise RuntimeError("MG_USERNAME und MG_PASSWORD müssen als Secrets gesetzt sein.")
-
-    watchlist = read_players()
-
-    with requests.Session() as s:
-        s.headers.update(SESSION_HEADERS)
-
-        if MG_COOKIE:
-            # Optionaler direkter Cookie auf der Spiel-Domain
-            s.cookies.set("PHPSESSID", MG_COOKIE, domain="int3.monstersgame.moonid.net")
-        else:
-            login_via_moonid(s)
-
-        html = fetch_highscore(s)
-        rows = parse_table(html)
-        today_players = pick_players(rows, watchlist)
-
-    state = load_state()
-    prev_players = state.get("players", {})
-    today = datetime.now(timezone.utc)
-
-    msg = build_message(today, prev_players, today_players)
-    send_discord(msg)
-
-    new_players = {name: today_players[name] for name in today_players}
-    new_state = {
-        "date": today.isoformat(),
-        "players": new_players
-    }
-    save_state(new_state)
-    print("Protokoll gesendet und State gespeichert.")
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"Fehler {e}")
-        sys.exit(1)
