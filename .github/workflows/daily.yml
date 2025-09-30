@@ -2,21 +2,21 @@ name: daily-highscore
 
 on:
   schedule:
-    - cron: "13 5 * * *"   # täglicher Lauf (UTC)
-  workflow_dispatch:        # manuell startbar
+    # 21:40 UTC = 23:40 Europe/Berlin (CET/CEST je nach Sommerzeit)
+    - cron: "40 21 * * *"
+  workflow_dispatch:
 
 permissions:
-  contents: write           # <— nötig zum Committen des state.json
+  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          persist-credentials: true   # nutzt den GITHUB_TOKEN für push
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,7 +38,7 @@ jobs:
           MG_SESSIONID:    ${{ secrets.MG_SESSIONID }}
           MG_CSRFTOKEN:    ${{ secrets.MG_CSRFTOKEN }}
           MG_CONNECT_ID:   ${{ secrets.MG_CONNECT_ID }}
-          MG_DEBUG:        ${{ secrets.MG_DEBUG }}      # bei dir schon = 1
+          MG_DEBUG:        ${{ secrets.MG_DEBUG }}
         run: |
           mkdir -p data
           python scraper.py
