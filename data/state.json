@@ -1,77 +1,77 @@
 {
-  "date": "2025-10-02T21:46:33.795303+00:00",
+  "date": "2025-10-03T17:20:51.905210+00:00",
   "players": {
     "[DDoV] Therapist": {
       "name": "[DDoV] Therapist",
       "level": 120,
-      "wins": 5387,
+      "wins": 5392,
       "losses": 1530,
       "anc": 110,
-      "gold": 148051
+      "gold": 148069
     },
     "[DDoV] Samurai Warrior": {
       "name": "[DDoV] Samurai Warrior",
       "level": 147,
-      "wins": 30521,
-      "losses": 2820,
+      "wins": 30544,
+      "losses": 2825,
       "anc": 81,
-      "gold": 1609930
+      "gold": 1612428
     },
     "[DDoV] Slevin": {
       "name": "[DDoV] Slevin",
       "level": 149,
-      "wins": 39481,
-      "losses": 5440,
+      "wins": 39497,
+      "losses": 5445,
       "anc": 72,
-      "gold": 1409338
+      "gold": 1409887
     },
     "[DDoV] rL.pa1n": {
       "name": "[DDoV] rL.pa1n",
       "level": 143,
       "wins": 19315,
-      "losses": 2546,
+      "losses": 2547,
       "anc": 103,
       "gold": 451178
     },
     "[DDoV] Mephisto": {
       "name": "[DDoV] Mephisto",
-      "level": 122,
-      "wins": 8171,
+      "level": 123,
+      "wins": 8180,
       "losses": 1633,
       "anc": 70,
-      "gold": 432110
+      "gold": 433213
     },
     "Desert Storm": {
       "name": "Desert Storm",
       "level": 140,
-      "wins": 11514,
-      "losses": 2641,
+      "wins": 11527,
+      "losses": 2643,
       "anc": 77,
-      "gold": 430563
+      "gold": 431045
     },
     "[DDoV] Dioseph": {
       "name": "[DDoV] Dioseph",
       "level": 120,
-      "wins": 6280,
+      "wins": 6295,
       "losses": 2259,
       "anc": 69,
-      "gold": 284143
+      "gold": 285432
     },
     "[DDoV] Breakout": {
       "name": "[DDoV] Breakout",
       "level": 98,
-      "wins": 13870,
-      "losses": 862,
+      "wins": 13871,
+      "losses": 863,
       "anc": 67,
       "gold": 260579
     },
     "[DDoV] Bundy": {
       "name": "[DDoV] Bundy",
       "level": 124,
-      "wins": 2846,
-      "losses": 2133,
+      "wins": 2849,
+      "losses": 2134,
       "anc": 106,
-      "gold": 147276
+      "gold": 147287
     }
   }
 }
