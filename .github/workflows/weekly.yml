@@ -1,8 +1,11 @@
-name: weekly
+name: run-weekly
+
+permissions:
+  contents: write
+
 on:
   schedule:
-    # Sonntags 18:00 UTC. Entspricht 20:00 in CEST und 19:00 in CET.
-    - cron: "0 18 * * 0"
+    - cron: "0 19 * * 0"
   workflow_dispatch:
 
 jobs:
@@ -12,32 +15,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore weekly state cache
-        uses: actions/cache@v4
-        with:
-          path: data
-          key: weekly-state
-
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install deps
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Run scraper (weekly)
+      - name: Run weekly scraper
         env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MG_USERNAME: ${{ secrets.MG_USERNAME }}
           MG_PASSWORD: ${{ secrets.MG_PASSWORD }}
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_WEEKLY }} # optional eigener Kanal
-          MG_DEBUG: "0"
-        run: python scraper.py
+          MG_SESSIONID: ${{ secrets.MG_SESSIONID }}
+          MG_PHPSESSID: ${{ secrets.MG_PHPSESSID }}
+          MG_COOKIE: ${{ secrets.MG_COOKIE }}
+          MG_CSRFTOKEN: ${{ secrets.MG_CSRFTOKEN }}
+          MG_CONNECT_ID: ${{ secrets.MG_CONNECT_ID }}
+        run: |
+          python scraper.py
 
-      - name: Save weekly state cache
-        uses: actions/cache@v4
-        with:
-          path: data
-          key: weekly-state
-          restore-keys: |
-            weekly-state
+      - name: Mirror weekly state file
+        run: |
+          mkdir -p data
+          if [ -f data/state.json ]; then
+            cp data/state.json data/weekly_state.json
+          fi
+
+      - name: Commit weekly state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/state.json data/weekly_state.json || true
+          git commit -m "weekly state update" || echo "no changes"
+          git push || true
