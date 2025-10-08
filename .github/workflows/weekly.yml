@@ -25,6 +25,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Prepare weekly baseline (use dedicated state file)
+        run: |
+          mkdir -p data
+          # Falls es bereits eine Weekly-Baseline gibt, vor dem Lauf in state.json spiegeln
+          if [ -f data/weekly_state.json ]; then
+            cp -f data/weekly_state.json data/state.json
+          fi
+
       - name: Run weekly scraper
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -38,11 +46,11 @@ jobs:
         run: |
           python scraper.py
 
-      - name: Mirror weekly state file
+      - name: Persist weekly baseline (mirror to weekly_state.json)
         run: |
           mkdir -p data
           if [ -f data/state.json ]; then
-            cp data/state.json data/weekly_state.json
+            cp -f data/state.json data/weekly_state.json
           fi
 
       - name: Commit weekly state
@@ -52,4 +60,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/state.json data/weekly_state.json || true
           git commit -m "weekly state update" || echo "no changes"
+          git fetch origin main
+          git pull --rebase origin main || true
           git push || true
