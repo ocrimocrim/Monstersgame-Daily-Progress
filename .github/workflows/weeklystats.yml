@@ -1,0 +1,44 @@
+name: MG Weekly Profiles
+
+on:
+  schedule:
+    - cron: "5 19 * * 0"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      - name: Run Weekly (baseline beim ersten Lauf, sonst Deltas)
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MG_USERNAME: ${{ secrets.MG_USERNAME }}
+          MG_PASSWORD: ${{ secrets.MG_PASSWORD }}
+          MG_SESSIONID: ${{ secrets.MG_SESSIONID }}
+          MG_PHPSESSID: ${{ secrets.MG_PHPSESSID }}
+          MG_COOKIE: ${{ secrets.MG_COOKIE }}
+          MG_CSRFTOKEN: ${{ secrets.MG_CSRFTOKEN }}
+          MG_CONNECT_ID: ${{ secrets.MG_CONNECT_ID }}
+        run: |
+          python weekly_profiles.py
+
+      - name: Commit weekly state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/profiles_state.json || true
+          git commit -m "weekly state update" || echo "no changes"
+          git push || true
