@@ -1,0 +1,209 @@
+{
+  "week": "2025-W41",
+  "players": {
+    "[DDoV] Slevin": {
+      "attrs": {
+        "STR": 250,
+        "DEF": 243,
+        "AGI": 254,
+        "STA": 235,
+        "DEX": 130
+      },
+      "stats": {
+        "F": 45144,
+        "Win": 39670,
+        "Lose": 5469,
+        "GoldPlus": 142600000,
+        "GoldMinus": 4800000,
+        "PewPewPlus": 13225185
+      }
+    },
+    "[DDoV] Samurai Warrior": {
+      "attrs": {
+        "STR": 270,
+        "DEF": 260,
+        "AGI": 266,
+        "STA": 260,
+        "DEX": 74
+      },
+      "stats": {
+        "F": 33604,
+        "Win": 30758,
+        "Lose": 2842,
+        "GoldPlus": 164100000,
+        "GoldMinus": 900000,
+        "PewPewPlus": 9219303
+      }
+    },
+    "[DDoV] rL.pa1n": {
+      "attrs": {
+        "STR": 279,
+        "DEF": 278,
+        "AGI": 279,
+        "STA": 279,
+        "DEX": 150
+      },
+      "stats": {
+        "F": 21876,
+        "Win": 19324,
+        "Lose": 2551,
+        "GoldPlus": 45100000,
+        "GoldMinus": 1900000,
+        "PewPewPlus": 11380037
+      }
+    },
+    "Desert Storm": {
+      "attrs": {
+        "STR": 283,
+        "DEF": 282,
+        "AGI": 283,
+        "STA": 283,
+        "DEX": 55
+      },
+      "stats": {
+        "F": 14296,
+        "Win": 11638,
+        "Lose": 2658,
+        "GoldPlus": 44200000,
+        "GoldMinus": 21700000,
+        "PewPewPlus": 6181489
+      }
+    },
+    "[DDoV] Bundy": {
+      "attrs": {
+        "STR": 281,
+        "DEF": 280,
+        "AGI": 282,
+        "STA": 280,
+        "DEX": 40
+      },
+      "stats": {
+        "F": 4999,
+        "Win": 2859,
+        "Lose": 2139,
+        "GoldPlus": 14800000,
+        "GoldMinus": 4300000,
+        "PewPewPlus": 2433450
+      }
+    },
+    "[DDoV] Mephisto": {
+      "attrs": {
+        "STR": 236,
+        "DEF": 234,
+        "AGI": 244,
+        "STA": 239,
+        "DEX": 30
+      },
+      "stats": {
+        "F": 9863,
+        "Win": 8221,
+        "Lose": 1641,
+        "GoldPlus": 43800000,
+        "GoldMinus": 100000,
+        "PewPewPlus": 1537512
+      }
+    },
+    "[DDoV] Therapist": {
+      "attrs": {
+        "STR": 283,
+        "DEF": 229,
+        "AGI": 237,
+        "STA": 322,
+        "DEX": 72
+      },
+      "stats": {
+        "F": 6939,
+        "Win": 5399,
+        "Lose": 1539,
+        "GoldPlus": 14800000,
+        "GoldMinus": 2500000,
+        "PewPewPlus": 4762089
+      }
+    },
+    "[DDoV] Dioseph": {
+      "attrs": {
+        "STR": 234,
+        "DEF": 231,
+        "AGI": 231,
+        "STA": 237,
+        "DEX": 20
+      },
+      "stats": {
+        "F": 8629,
+        "Win": 6363,
+        "Lose": 2265,
+        "GoldPlus": 29300000,
+        "GoldMinus": 2100000,
+        "PewPewPlus": 1498777
+      }
+    },
+    "[DDoV] Breakout": {
+      "attrs": {
+        "STR": 209,
+        "DEF": 200,
+        "AGI": 209,
+        "STA": 200,
+        "DEX": 84
+      },
+      "stats": {
+        "F": 14754,
+        "Win": 13883,
+        "Lose": 869,
+        "GoldPlus": 26100000,
+        "GoldMinus": 100000,
+        "PewPewPlus": 3560568
+      }
+    },
+    "The puzzle": {
+      "attrs": {
+        "STR": 230,
+        "DEF": 230,
+        "AGI": 230,
+        "STA": 226,
+        "DEX": 20
+      },
+      "stats": {
+        "F": 17744,
+        "Win": 13755,
+        "Lose": 3989,
+        "GoldPlus": 10200000,
+        "GoldMinus": 18700000,
+        "PewPewPlus": 1519155
+      }
+    },
+    "[DTG] Freiberufler": {
+      "attrs": {
+        "STR": 200,
+        "DEF": 180,
+        "AGI": 192,
+        "STA": 188,
+        "DEX": 45
+      },
+      "stats": {
+        "F": 3706,
+        "Win": 3063,
+        "Lose": 642,
+        "GoldPlus": 4100000,
+        "GoldMinus": 0,
+        "PewPewPlus": 667978
+      }
+    },
+    "[DTG] Ober_lican": {
+      "attrs": {
+        "STR": 81,
+        "DEF": 92,
+        "AGI": 89,
+        "STA": 94,
+        "DEX": 25
+      },
+      "stats": {
+        "F": 1075,
+        "Win": 621,
+        "Lose": 454,
+        "GoldPlus": 300000,
+        "GoldMinus": 900000,
+        "PewPewPlus": 75876
+      }
+    }
+  }
+}
