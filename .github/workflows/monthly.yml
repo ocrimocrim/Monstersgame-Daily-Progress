@@ -1,15 +1,30 @@
+name: run-monthly
+
 permissions:
   contents: write
+
+on:
+  schedule:
+    - cron: "0 19 1 * *"   # jeden Monat am 1. um 19:00 UTC
+  workflow_dispatch:
 
 jobs:
   run-monthly:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run monthly scraper
         env:
@@ -21,7 +36,8 @@ jobs:
           MG_COOKIE: ${{ secrets.MG_COOKIE }}
           MG_CSRFTOKEN: ${{ secrets.MG_CSRFTOKEN }}
           MG_CONNECT_ID: ${{ secrets.MG_CONNECT_ID }}
-        run: python scraper.py
+        run: |
+          python scraper.py
 
       - name: Commit monthly state
         if: always()
