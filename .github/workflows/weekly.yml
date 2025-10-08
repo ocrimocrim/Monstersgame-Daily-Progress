@@ -1,0 +1,43 @@
+name: weekly
+on:
+  schedule:
+    # Sonntags 18:00 UTC. Entspricht 20:00 in CEST und 19:00 in CET.
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+
+jobs:
+  run-weekly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore weekly state cache
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: weekly-state
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run scraper (weekly)
+        env:
+          MG_USERNAME: ${{ secrets.MG_USERNAME }}
+          MG_PASSWORD: ${{ secrets.MG_PASSWORD }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_WEEKLY }} # optional eigener Kanal
+          MG_DEBUG: "0"
+        run: python scraper.py
+
+      - name: Save weekly state cache
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: weekly-state
+          restore-keys: |
+            weekly-state
