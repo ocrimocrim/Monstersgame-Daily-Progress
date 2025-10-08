@@ -161,24 +161,39 @@ def main():
 
     ensure_dirs()
     state = load_state()
-    week_str = f"{datetime.now(timezone.utc).isocalendar().year}-W{datetime.now(timezone.utc).isocalendar().week:02d}"
+    iso = datetime.now(timezone.utc).isocalendar()
+    week_str = f"{iso.year}-W{iso.week:02d}"
+
+    # Baseline erkennen: noch keine Spieler im gespeicherten Zustand
     prev = state.get("players", {})
+    baseline_mode = not bool(prev)
 
     session = requests.Session()
     set_known_cookies(session)
 
     deltas, ranks = {}, []
+    current = {}
 
     for p in players:
         html = fetch_html(session, p["url"])
         attrs, stats = parse_profile(html)
-        old = prev.get(p["name"], {"attrs": attrs, "stats": stats})
-        da = {k: attrs[k] - old["attrs"].get(k, 0) for k in attrs}
-        ds = {k: stats[k] - old["stats"].get(k, 0) for k in stats}
-        deltas[p["name"]] = {"attrs": da, "stats": ds}
-        ranks.append((p["name"], da["STR"] + da["DEF"] + da["AGI"] + da["STA"]))
-        prev[p["name"]] = {"attrs": attrs, "stats": stats}
+        current[p["name"]] = {"attrs": attrs, "stats": stats}
 
+        if not baseline_mode:
+            old = prev.get(p["name"], {"attrs": attrs, "stats": stats})
+            da = {k: attrs[k] - old["attrs"].get(k, 0) for k in ["STR","DEF","AGI","STA","DEX"]}
+            ds = {k: stats[k] - old["stats"].get(k, 0) for k in ["F","Win","Lose","GoldPlus","GoldMinus","PewPewPlus"]}
+            deltas[p["name"]] = {"attrs": da, "stats": ds}
+            ranks.append((p["name"], da["STR"] + da["DEF"] + da["AGI"] + da["STA"]))
+
+    # Erstlauf: nur Baseline speichern, nichts posten
+    if baseline_mode:
+        new_state = {"week": week_str, "players": current}
+        save_state(new_state)
+        print("Baseline erfasst und gespeichert in data/profiles_state.json.")
+        return
+
+    # Regulärer Wochenreport mit Deltas
     ranks.sort(key=lambda x: x[1], reverse=True)
 
     lines = [f"MG Weekly Report {week_str}", ""]
@@ -196,9 +211,10 @@ def main():
         lines.append(f"{pos}. {name} {val}")
 
     send_discord("\n".join(lines))
-    state["players"] = prev
-    state["week"] = week_str
-    save_state(state)
+
+    # neuen Stand speichern
+    new_state = {"week": week_str, "players": current}
+    save_state(new_state)
     print("Weekly Report gesendet und gespeichert.")
 
 if __name__ == "__main__":
