@@ -1,43 +1,33 @@
-name: monthly
-on:
-  schedule:
-    # Am 1. des Monats 18:00 UTC. Entspricht 20:00 CEST bzw. 19:00 CET.
-    - cron: "0 18 1 * *"
-  workflow_dispatch:
+permissions:
+  contents: write
 
 jobs:
   run-monthly:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Restore monthly state cache
-        uses: actions/cache@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          path: data
-          key: monthly-state
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install deps
-        run: pip install -r requirements.txt
-
-      - name: Run scraper (monthly)
+      - name: Run monthly scraper
         env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MG_USERNAME: ${{ secrets.MG_USERNAME }}
           MG_PASSWORD: ${{ secrets.MG_PASSWORD }}
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_MONTHLY }} # optional eigener Kanal
-          MG_DEBUG: "0"
+          MG_SESSIONID: ${{ secrets.MG_SESSIONID }}
+          MG_PHPSESSID: ${{ secrets.MG_PHPSESSID }}
+          MG_COOKIE: ${{ secrets.MG_COOKIE }}
+          MG_CSRFTOKEN: ${{ secrets.MG_CSRFTOKEN }}
+          MG_CONNECT_ID: ${{ secrets.MG_CONNECT_ID }}
         run: python scraper.py
 
-      - name: Save monthly state cache
-        uses: actions/cache@v4
-        with:
-          path: data
-          key: monthly-state
-          restore-keys: |
-            monthly-state
+      - name: Commit monthly state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/state.json || true
+          git commit -m "monthly state update" || echo "no changes"
+          git push || true
