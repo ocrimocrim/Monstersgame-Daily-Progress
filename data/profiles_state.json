@@ -4,86 +4,86 @@
     "[DDoV] Slevin": {
       "attrs": {
         "STR": 250,
-        "DEF": 243,
+        "DEF": 245,
         "AGI": 254,
-        "STA": 235,
+        "STA": 236,
         "DEX": 130
       },
       "stats": {
-        "F": 45166,
-        "Win": 39692,
-        "Lose": 5469,
-        "GoldPlus": 142900000,
+        "F": 45356,
+        "Win": 39860,
+        "Lose": 5491,
+        "GoldPlus": 144100000,
         "GoldMinus": 4800000,
-        "PewPewPlus": 13237307
+        "PewPewPlus": 13377520
       }
     },
     "[DDoV] Samurai Warrior": {
       "attrs": {
         "STR": 270,
         "DEF": 260,
-        "AGI": 267,
+        "AGI": 270,
         "STA": 260,
         "DEX": 74
       },
       "stats": {
-        "F": 33624,
-        "Win": 30778,
-        "Lose": 2842,
-        "GoldPlus": 164300000,
+        "F": 33794,
+        "Win": 30927,
+        "Lose": 2863,
+        "GoldPlus": 165700000,
         "GoldMinus": 900000,
-        "PewPewPlus": 9229701
+        "PewPewPlus": 9320544
       }
     },
     "[DDoV] rL.pa1n": {
       "attrs": {
         "STR": 279,
-        "DEF": 278,
+        "DEF": 279,
         "AGI": 279,
         "STA": 279,
         "DEX": 150
       },
       "stats": {
-        "F": 21878,
-        "Win": 19324,
-        "Lose": 2553,
+        "F": 21893,
+        "Win": 19332,
+        "Lose": 2560,
         "GoldPlus": 45100000,
         "GoldMinus": 2000000,
-        "PewPewPlus": 11383008
+        "PewPewPlus": 11412773
       }
     },
     "Desert Storm": {
       "attrs": {
-        "STR": 283,
-        "DEF": 282,
-        "AGI": 283,
+        "STR": 284,
+        "DEF": 283,
+        "AGI": 284,
         "STA": 283,
         "DEX": 55
       },
       "stats": {
-        "F": 14297,
-        "Win": 11638,
-        "Lose": 2659,
-        "GoldPlus": 44200000,
-        "GoldMinus": 21700000,
-        "PewPewPlus": 6181762
+        "F": 14366,
+        "Win": 11696,
+        "Lose": 2670,
+        "GoldPlus": 45000000,
+        "GoldMinus": 21800000,
+        "PewPewPlus": 6220399
       }
     },
     "[DDoV] Bundy": {
       "attrs": {
-        "STR": 281,
-        "DEF": 280,
+        "STR": 282,
+        "DEF": 282,
         "AGI": 282,
         "STA": 280,
         "DEX": 40
       },
       "stats": {
-        "F": 5001,
-        "Win": 2861,
-        "Lose": 2139,
+        "F": 5015,
+        "Win": 2870,
+        "Lose": 2144,
         "GoldPlus": 14800000,
         "GoldMinus": 4300000,
-        "PewPewPlus": 2435993
+        "PewPewPlus": 2450891
       }
     },
     "[DDoV] Mephisto": {
@@ -91,33 +91,33 @@
         "STR": 236,
         "DEF": 234,
         "AGI": 244,
-        "STA": 239,
+        "STA": 240,
         "DEX": 30
       },
       "stats": {
-        "F": 9863,
-        "Win": 8221,
-        "Lose": 1641,
-        "GoldPlus": 43800000,
+        "F": 9918,
+        "Win": 8267,
+        "Lose": 1650,
+        "GoldPlus": 44100000,
         "GoldMinus": 100000,
-        "PewPewPlus": 1537512
+        "PewPewPlus": 1555727
       }
     },
     "[DDoV] Therapist": {
       "attrs": {
         "STR": 283,
-        "DEF": 229,
-        "AGI": 237,
+        "DEF": 230,
+        "AGI": 238,
         "STA": 322,
         "DEX": 72
       },
       "stats": {
-        "F": 6940,
-        "Win": 5399,
-        "Lose": 1540,
+        "F": 6953,
+        "Win": 5407,
+        "Lose": 1545,
         "GoldPlus": 14800000,
         "GoldMinus": 2500000,
-        "PewPewPlus": 4762864
+        "PewPewPlus": 4772735
       }
     },
     "[DDoV] Dioseph": {
@@ -129,29 +129,29 @@
         "DEX": 20
       },
       "stats": {
-        "F": 8629,
-        "Win": 6363,
-        "Lose": 2265,
-        "GoldPlus": 29300000,
+        "F": 8681,
+        "Win": 6410,
+        "Lose": 2270,
+        "GoldPlus": 29600000,
         "GoldMinus": 2100000,
-        "PewPewPlus": 1498777
+        "PewPewPlus": 1522898
       }
     },
     "[DDoV] Breakout": {
       "attrs": {
-        "STR": 209,
-        "DEF": 200,
-        "AGI": 209,
-        "STA": 200,
-        "DEX": 85
+        "STR": 210,
+        "DEF": 201,
+        "AGI": 210,
+        "STA": 201,
+        "DEX": 88
       },
       "stats": {
-        "F": 14755,
-        "Win": 13883,
-        "Lose": 870,
+        "F": 14769,
+        "Win": 13892,
+        "Lose": 875,
         "GoldPlus": 26100000,
         "GoldMinus": 100000,
-        "PewPewPlus": 3561006
+        "PewPewPlus": 3565464
       }
     },
     "The puzzle": {
@@ -159,50 +159,50 @@
         "STR": 230,
         "DEF": 230,
         "AGI": 230,
-        "STA": 226,
+        "STA": 228,
         "DEX": 20
       },
       "stats": {
-        "F": 17745,
-        "Win": 13755,
-        "Lose": 3990,
+        "F": 17788,
+        "Win": 13780,
+        "Lose": 4008,
         "GoldPlus": 10200000,
         "GoldMinus": 18700000,
-        "PewPewPlus": 1519155
+        "PewPewPlus": 1524513
       }
     },
     "[DTG] Freiberufler": {
       "attrs": {
         "STR": 200,
         "DEF": 180,
-        "AGI": 192,
-        "STA": 188,
+        "AGI": 195,
+        "STA": 189,
         "DEX": 45
       },
       "stats": {
-        "F": 3706,
-        "Win": 3063,
-        "Lose": 642,
+        "F": 3720,
+        "Win": 3074,
+        "Lose": 645,
         "GoldPlus": 4100000,
         "GoldMinus": 0,
-        "PewPewPlus": 667978
+        "PewPewPlus": 672003
       }
     },
     "[DTG] Ober_lican": {
       "attrs": {
         "STR": 82,
         "DEF": 92,
-        "AGI": 89,
-        "STA": 94,
+        "AGI": 91,
+        "STA": 95,
         "DEX": 25
       },
       "stats": {
-        "F": 1075,
-        "Win": 621,
-        "Lose": 454,
+        "F": 1088,
+        "Win": 628,
+        "Lose": 460,
         "GoldPlus": 300000,
         "GoldMinus": 900000,
-        "PewPewPlus": 75876
+        "PewPewPlus": 77426
       }
     }
   }
