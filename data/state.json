@@ -1,10 +1,10 @@
 {
-  "date": "2025-10-12T21:46:32.512966+00:00",
+  "date": "2025-10-13T21:46:39.722436+00:00",
   "players": {
     "[DDoV] Therapist": {
       "name": "[DDoV] Therapist",
       "level": 121,
-      "wins": 5409,
+      "wins": 5411,
       "losses": 1545,
       "anc": 110,
       "gold": 148116
@@ -12,66 +12,66 @@
     "[DDoV] Samurai Warrior": {
       "name": "[DDoV] Samurai Warrior",
       "level": 148,
-      "wins": 30934,
-      "losses": 2863,
+      "wins": 30962,
+      "losses": 2866,
       "anc": 82,
-      "gold": 1657869
+      "gold": 1659193
     },
     "[DDoV] Slevin": {
       "name": "[DDoV] Slevin",
       "level": 150,
-      "wins": 39867,
-      "losses": 5491,
+      "wins": 39887,
+      "losses": 5499,
       "anc": 72,
-      "gold": 1441172
+      "gold": 1442757
+    },
+    "Desert Storm": {
+      "name": "Desert Storm",
+      "level": 141,
+      "wins": 11714,
+      "losses": 2675,
+      "anc": 77,
+      "gold": 451333
     },
     "[DDoV] rL.pa1n": {
       "name": "[DDoV] rL.pa1n",
       "level": 144,
-      "wins": 19334,
-      "losses": 2560,
+      "wins": 19335,
+      "losses": 2561,
       "anc": 103,
-      "gold": 451203
-    },
-    "Desert Storm": {
-      "name": "Desert Storm",
-      "level": 140,
-      "wins": 11700,
-      "losses": 2671,
-      "anc": 77,
-      "gold": 450649
+      "gold": 451211
     },
     "[DDoV] Mephisto": {
       "name": "[DDoV] Mephisto",
       "level": 124,
-      "wins": 8267,
-      "losses": 1651,
+      "wins": 8274,
+      "losses": 1653,
       "anc": 72,
-      "gold": 441150
+      "gold": 441454
     },
     "[DDoV] Dioseph": {
       "name": "[DDoV] Dioseph",
       "level": 121,
-      "wins": 6410,
-      "losses": 2271,
+      "wins": 6424,
+      "losses": 2273,
       "anc": 70,
-      "gold": 296139
+      "gold": 298145
     },
     "[DDoV] Breakout": {
       "name": "[DDoV] Breakout",
       "level": 99,
-      "wins": 13893,
-      "losses": 875,
+      "wins": 13895,
+      "losses": 876,
       "anc": 67,
       "gold": 261470
     },
     "[DDoV] Bundy": {
       "name": "[DDoV] Bundy",
       "level": 124,
-      "wins": 2870,
+      "wins": 2873,
       "losses": 2145,
       "anc": 106,
-      "gold": 147818
+      "gold": 148051
     }
   }
 }
